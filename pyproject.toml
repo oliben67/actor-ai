@@ -1,0 +1,117 @@
+[project]
+name = "actor-ai"
+version = "0.1.0"
+description = "Multi-provider AI agents built on pykka."
+readme = "README.md"
+authors = [
+    { name = "Olivier Steck", email = "osteck@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "pykka>=4.0",
+    "anthropic>=0.40",
+    "openai>=1.0",
+    "litellm>=1.0",
+]
+
+[project.scripts]
+actor-ai = "actor_ai:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=6.0",
+    "ruff>=0.8",
+    "mypy>=1.0",
+]
+
+[tool.uv]
+native-tls = true
+
+[build-system]
+requires = ["uv_build>=0.10.12,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=actor_ai --cov-report=term-missing --cov-fail-under=95"
+
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.ruff]
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".ipynb_checkpoints",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pyenv",
+    ".pytest_cache",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    ".vscode",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "site-packages",
+    "venv",
+]
+line-length = 100
+indent-width = 4
+target-version = "py314"
+fix = true
+
+[tool.ruff.lint]
+extend-select = ["I", "UP"]
+ignore = ["E501"]
+fixable = ["ALL"]
+unfixable = []
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+isort.force-sort-within-sections = false
+isort.required-imports = ["from __future__ import annotations"]
+isort.import-heading.future = "Future imports (must occur at the beginning of the file):"
+isort.import-heading.standard-library = "Standard library imports:"
+isort.import-heading.third-party = "Third party imports:"
+isort.import-heading.first-party = "Local imports:"
+isort.no-lines-before = ["local-folder"]
+isort.section-order = [
+    "future",
+    "standard-library",
+    "third-party",
+    "first-party",
+    "local-folder",
+]
+isort.known-first-party = ["actor_ai"]
+
+[tool.ruff.lint.per-file-ignores]
+# examples manipulate sys.path before importing; allow import-not-at-top
+"examples/*.py" = ["E402", "F401"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+docstring-code-format = false
+docstring-code-line-length = "dynamic"
+
+[tool.mypy]
+python_version = "3.14"
+ignore_missing_imports = true
+warn_unused_configs = true
+warn_redundant_casts = true

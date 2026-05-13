@@ -1,0 +1,249 @@
+# https://taskfile.dev  —  requires Task ≥ 3.28
+version: '3'
+
+vars:
+  SRC:      src/actor_ai
+  TESTS:    tests
+  EXAMPLES: examples
+
+# ── Default ────────────────────────────────────────────────────────────────
+tasks:
+  default:
+    desc: List all available tasks
+    silent: true
+    cmd: task --list
+
+  # ── Setup ────────────────────────────────────────────────────────────────
+  install:
+    desc: Sync all dependencies including the dev group
+    cmd: uv sync --all-groups
+
+  install:ci:
+    desc: Sync with a frozen lockfile (for CI — fails if lockfile is stale)
+    cmd: uv sync --all-groups --frozen
+
+  # ── Testing ──────────────────────────────────────────────────────────────
+  test:
+    desc: Run the full test suite with branch coverage (≥ 95 % required)
+    cmd: uv run pytest
+
+  test:fast:
+    desc: Run tests without coverage for quick iteration
+    cmd: uv run pytest --no-cov -q
+
+  test:verbose:
+    desc: Run tests with full verbose output
+    cmd: uv run pytest -v
+
+  test:one:
+    desc: "Run tests matching a name pattern   [usage: task test:one -- session]"
+    cmd: uv run pytest -k "{{.CLI_ARGS}}" -v
+
+  test:file:
+    desc: "Run a single test file              [usage: task test:file -- tests/test_actor.py]"
+    cmd: uv run pytest {{.CLI_ARGS}} -v
+
+  test:cov:html:
+    desc: Generate an HTML coverage report in htmlcov/ and print the path
+    cmds:
+      - uv run pytest --cov-report=html --cov-report=term-missing
+      - cmd: echo "Report → htmlcov/index.html"
+        silent: true
+
+  test:cov:xml:
+    desc: Generate an XML coverage report (for CI badge / Codecov)
+    cmd: uv run pytest --cov-report=xml --cov-report=term-missing
+
+  test:parallel:
+    desc: Run tests in parallel with pytest-xdist (install it first with task deps:add:dev -- pytest-xdist)
+    cmd: uv run pytest --no-cov -n auto
+
+  # ── Linting ──────────────────────────────────────────────────────────────
+  lint:
+    desc: Check source and tests with ruff
+    cmd: uv run ruff check {{.SRC}} {{.TESTS}}
+
+  lint:fix:
+    desc: Check source and tests with ruff, auto-fix where possible
+    cmd: uv run ruff check --fix {{.SRC}} {{.TESTS}}
+
+  lint:all:
+    desc: Check source, tests, and examples with ruff
+    cmd: uv run ruff check {{.SRC}} {{.TESTS}} {{.EXAMPLES}}
+
+  lint:watch:
+    desc: Watch and re-lint on every file change
+    cmd: uv run ruff check --watch {{.SRC}} {{.TESTS}}
+
+  # ── Formatting ───────────────────────────────────────────────────────────
+  format:
+    desc: Format all Python files in-place
+    cmd: uv run ruff format {{.SRC}} {{.TESTS}} {{.EXAMPLES}}
+
+  format:check:
+    desc: Check formatting without modifying files (used in CI)
+    cmd: uv run ruff format --check {{.SRC}} {{.TESTS}} {{.EXAMPLES}}
+
+  format:diff:
+    desc: Show formatting changes that would be applied
+    cmd: uv run ruff format --diff {{.SRC}} {{.TESTS}} {{.EXAMPLES}}
+
+  # ── Type checking ─────────────────────────────────────────────────────────
+  typecheck:
+    desc: Run mypy static type checker on the library
+    cmd: uv run mypy {{.SRC}}
+
+  typecheck:strict:
+    desc: Run mypy with --strict (more thorough but may require additional annotations)
+    cmd: uv run mypy --strict {{.SRC}}
+
+  typecheck:report:
+    desc: Generate an HTML type-checking report in mypy-report/
+    cmd: uv run mypy {{.SRC}} --html-report mypy-report
+
+  # ── Combined workflows ────────────────────────────────────────────────────
+  check:
+    desc: Run all quality gates — lint, format check, typecheck, full test suite
+    cmds:
+      - task: lint
+      - task: format:check
+      - task: typecheck
+      - task: test
+
+  fix:
+    desc: Auto-fix all lint issues and reformat all files
+    cmds:
+      - task: lint:fix
+      - task: format
+
+  dev:
+    desc: Developer loop — fix everything, then run tests
+    cmds:
+      - task: fix
+      - task: test
+
+  ci:
+    desc: Full CI pipeline — frozen install → lint → format check → typecheck → test
+    cmds:
+      - task: install:ci
+      - task: lint
+      - task: format:check
+      - task: typecheck
+      - task: test
+
+  # ── Build & publish ───────────────────────────────────────────────────────
+  build:
+    desc: Build sdist and wheel into dist/
+    cmds:
+      - rm -rf dist/
+      - uv build
+      - cmd: ls -lh dist/
+        silent: false
+
+  publish:
+    desc: Build and publish to PyPI (prompts for confirmation)
+    prompt: "Publish to PyPI — this cannot be undone, continue?"
+    cmds:
+      - task: check
+      - task: build
+      - uv publish
+
+  publish:test:
+    desc: Build and publish to TestPyPI for a dry run
+    cmds:
+      - task: build
+      - uv publish --publish-url https://test.pypi.org/legacy/
+
+  # ── Dependencies ─────────────────────────────────────────────────────────
+  deps:update:
+    desc: Update all packages to their latest allowed versions
+    cmd: uv lock --upgrade
+
+  deps:update:pkg:
+    desc: "Update a single package                [usage: task deps:update:pkg -- litellm]"
+    cmd: uv lock --upgrade-package {{.CLI_ARGS}}
+
+  deps:add:
+    desc: "Add a runtime dependency               [usage: task deps:add -- httpx]"
+    cmd: uv add {{.CLI_ARGS}}
+
+  deps:add:dev:
+    desc: "Add a development dependency           [usage: task deps:add:dev -- pytest-xdist]"
+    cmd: uv add --dev {{.CLI_ARGS}}
+
+  deps:remove:
+    desc: "Remove a dependency                    [usage: task deps:remove -- httpx]"
+    cmd: uv remove {{.CLI_ARGS}}
+
+  deps:tree:
+    desc: Show the full dependency tree
+    cmd: uv tree
+
+  deps:outdated:
+    desc: List packages that have newer versions available
+    cmd: uv tree --outdated
+
+  # ── Examples ─────────────────────────────────────────────────────────────
+  examples:
+    desc: Run all numbered examples and report pass / fail counts
+    cmd: |
+      ok=0; fail=0
+      for f in {{.EXAMPLES}}/[0-9]*.py; do
+        printf '\n\033[1m=== %s ===\033[0m\n' "$f"
+        if uv run python "$f"; then
+          ok=$((ok + 1))
+        else
+          fail=$((fail + 1))
+          printf '\033[31mFAILED: %s\033[0m\n' "$f" >&2
+        fi
+      done
+      printf '\n\033[1mResults: %d passed, %d failed\033[0m\n' "$ok" "$fail"
+      [ "$fail" -eq 0 ]
+
+  example:
+    desc: "Run one example by number prefix       [usage: task example -- 07]"
+    cmd: |
+      f=$(ls {{.EXAMPLES}}/{{.CLI_ARGS}}*.py 2>/dev/null | head -1)
+      if [ -z "$f" ]; then
+        printf 'No example matching "%s" in {{.EXAMPLES}}/\n' "{{.CLI_ARGS}}" >&2
+        exit 1
+      fi
+      uv run python "$f"
+
+  # ── REPL & utilities ─────────────────────────────────────────────────────
+  repl:
+    desc: Open an interactive Python shell with actor_ai available
+    interactive: true
+    cmd: uv run python
+
+  run:
+    desc: "Run any command in the project environment [usage: task run -- python script.py]"
+    cmd: uv run {{.CLI_ARGS}}
+
+  version:
+    desc: Print the current package version
+    cmd: uv run python -c "import actor_ai; print(actor_ai.__version__ if hasattr(actor_ai,'__version__') else 'version not set')"
+
+  # ── Clean ─────────────────────────────────────────────────────────────────
+  clean:
+    desc: Remove build artefacts, caches, and coverage data
+    silent: true
+    cmd: |
+      rm -rf dist/ build/ .eggs/
+      rm -rf src/*.egg-info
+      rm -rf .pytest_cache .mypy_cache .ruff_cache mypy-report
+      rm -rf htmlcov/ .coverage .coverage.*
+      find . -path './.venv' -prune -o -type d -name '__pycache__' -print \
+        | xargs rm -rf 2>/dev/null || true
+      find . -path './.venv' -prune -o -name '*.pyc' -print \
+        | xargs rm -f 2>/dev/null || true
+      printf '\033[32m✓ Clean\033[0m\n'
+
+  clean:all:
+    desc: Remove everything including the virtual environment (run task install to restore)
+    cmds:
+      - task: clean
+      - cmd: rm -rf .venv/
+        silent: true
+      - cmd: printf '\033[32m✓ Fully clean\033[0m\n'
+        silent: true
