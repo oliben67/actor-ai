@@ -21,6 +21,7 @@ from actor_ai.providers.openai import (
     Gemini,
     Mistral,
     _to_openai_tool,
+    _token_from_vscode_keyring,
 )
 
 # ---------------------------------------------------------------------------
@@ -578,6 +579,57 @@ class TestGPTConfiguration:
 
 
 # ---------------------------------------------------------------------------
+# _token_from_vscode_keyring
+# ---------------------------------------------------------------------------
+
+
+class TestTokenFromVscodeKeyring:
+    def test_returns_none_when_keyring_not_installed(self):
+        with patch.dict("sys.modules", {"keyring": None}):
+            assert _token_from_vscode_keyring() is None
+
+    def test_returns_none_when_no_entry_found(self):
+        mock_keyring = MagicMock()
+        mock_keyring.get_password.return_value = None
+        with patch.dict("sys.modules", {"keyring": mock_keyring}):
+            assert _token_from_vscode_keyring() is None
+
+    def test_returns_plain_token_string(self):
+        mock_keyring = MagicMock()
+        mock_keyring.get_password.side_effect = lambda svc, acct: (
+            "ghp_plain_token" if svc == "vscode.github-authentication" else None
+        )
+        with patch.dict("sys.modules", {"keyring": mock_keyring}):
+            assert _token_from_vscode_keyring() == "ghp_plain_token"
+
+    def test_extracts_password_field_from_json(self):
+        import json
+
+        mock_keyring = MagicMock()
+        mock_keyring.get_password.return_value = json.dumps(
+            {"account": "oliben67", "password": "ghp_from_json_password"}
+        )
+        with patch.dict("sys.modules", {"keyring": mock_keyring}):
+            assert _token_from_vscode_keyring() == "ghp_from_json_password"
+
+    def test_extracts_token_field_from_json(self):
+        import json
+
+        mock_keyring = MagicMock()
+        mock_keyring.get_password.return_value = json.dumps({"token": "ghp_from_json_token"})
+        with patch.dict("sys.modules", {"keyring": mock_keyring}):
+            assert _token_from_vscode_keyring() == "ghp_from_json_token"
+
+    def test_tries_second_service_when_first_returns_none(self):
+        mock_keyring = MagicMock()
+        mock_keyring.get_password.side_effect = lambda svc, acct: (
+            "ghp_second_service" if svc == "GitHub.github.com" else None
+        )
+        with patch.dict("sys.modules", {"keyring": mock_keyring}):
+            assert _token_from_vscode_keyring() == "ghp_second_service"
+
+
+# ---------------------------------------------------------------------------
 # Copilot provider
 # ---------------------------------------------------------------------------
 
@@ -675,28 +727,52 @@ class TestCopilotProvider:
                 Copilot()
         assert captured.get("api_key") == "ghp_from_cli"
 
-    def test_gh_cli_not_found_yields_none(self, monkeypatch):
+    def test_gh_cli_not_found_raises_clear_error(self, monkeypatch):
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-        captured: dict = {}
-        with patch(
-            "actor_ai.providers.openai.subprocess.run", side_effect=FileNotFoundError
-        ):
-            with patch("actor_ai.providers.openai.OpenAI") as mock_oai:
-                mock_oai.side_effect = lambda **kw: captured.update(kw) or MagicMock()
-                Copilot()
-        assert captured.get("api_key") is None
+        with patch("actor_ai.providers.openai.subprocess.run", side_effect=FileNotFoundError):
+            with patch("actor_ai.providers.openai._token_from_vscode_keyring", return_value=None):
+                with pytest.raises(ValueError, match="No GitHub token found for Copilot"):
+                    with patch("actor_ai.providers.openai.OpenAI"):
+                        Copilot()
 
-    def test_gh_cli_nonzero_exit_yields_none(self, monkeypatch):
+    def test_gh_cli_nonzero_exit_raises_clear_error(self, monkeypatch):
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stdout = ""
+        with patch("actor_ai.providers.openai.subprocess.run", return_value=mock_result):
+            with patch("actor_ai.providers.openai._token_from_vscode_keyring", return_value=None):
+                with pytest.raises(ValueError, match="No GitHub token found for Copilot"):
+                    with patch("actor_ai.providers.openai.OpenAI"):
+                        Copilot()
+
+    def test_error_message_lists_all_auth_options(self, monkeypatch):
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        with patch("actor_ai.providers.openai.subprocess.run", side_effect=FileNotFoundError):
+            with patch("actor_ai.providers.openai._token_from_vscode_keyring", return_value=None):
+                with pytest.raises(ValueError) as exc:
+                    with patch("actor_ai.providers.openai.OpenAI"):
+                        Copilot()
+        msg = str(exc.value)
+        assert "GITHUB_TOKEN" in msg
+        assert "gh auth login" in msg
+        assert "keyring" in msg
+
+    def test_falls_back_to_vscode_keyring(self, monkeypatch):
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
         mock_result = MagicMock()
         mock_result.returncode = 1
         mock_result.stdout = ""
         captured: dict = {}
         with patch("actor_ai.providers.openai.subprocess.run", return_value=mock_result):
-            with patch("actor_ai.providers.openai.OpenAI") as mock_oai:
-                mock_oai.side_effect = lambda **kw: captured.update(kw) or MagicMock()
-                Copilot()
-        assert captured.get("api_key") is None
+            with patch(
+                "actor_ai.providers.openai._token_from_vscode_keyring",
+                return_value="ghp_from_vscode",
+            ):
+                with patch("actor_ai.providers.openai.OpenAI") as mock_oai:
+                    mock_oai.side_effect = lambda **kw: captured.update(kw) or MagicMock()
+                    Copilot()
+        assert captured.get("api_key") == "ghp_from_vscode"
 
     def test_timeout_passed_to_client_constructor(self):
         captured = self._captured_init(timeout=30.0)

@@ -306,6 +306,42 @@ class DeepSeek(_OpenAICompatible):
         )
 
 
+_VSCODE_KEYRING_SERVICES = (
+    "vscode.github-authentication",
+    "GitHub.github.com",
+)
+
+
+def _token_from_vscode_keyring() -> str | None:
+    """Try to read a GitHub token from VS Code's OS keyring entry.
+
+    VS Code stores GitHub auth sessions via SecretStorage (libsecret on Linux,
+    Keychain on macOS, Windows Credential Manager on Windows).  The ``keyring``
+    package is an optional dependency; if it is not installed, or if no matching
+    entry exists, this returns ``None`` silently.
+    """
+    try:
+        import keyring  # optional dependency
+
+        for service in _VSCODE_KEYRING_SERVICES:
+            token = keyring.get_password(service, "github.com")
+            if token:
+                # Stored value may be JSON {"account":…,"password":"ghp_…"}
+                try:
+                    import json as _json
+
+                    data = _json.loads(token)
+                    if isinstance(data, dict):
+                        token = data.get("password") or data.get("token") or token
+                except (ValueError, TypeError):
+                    pass
+                if token:
+                    return str(token)
+    except ImportError:
+        pass
+    return None
+
+
 def _resolve_github_token(explicit_key: str | None) -> str | None:
     """Return a GitHub token using the first available source.
 
@@ -313,6 +349,8 @@ def _resolve_github_token(explicit_key: str | None) -> str | None:
     1. ``explicit_key`` argument (passed directly to the constructor)
     2. ``GITHUB_TOKEN`` environment variable
     3. ``gh auth token`` CLI output (works when ``gh`` is authenticated)
+    4. OS keyring entry written by the VS Code GitHub Copilot extension
+       (requires the optional ``keyring`` package)
     """
     if explicit_key:
         return explicit_key
@@ -333,7 +371,7 @@ def _resolve_github_token(explicit_key: str | None) -> str | None:
                 return token
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         pass
-    return None
+    return _token_from_vscode_keyring()
 
 
 # Literal type for IDE autocomplete — keep in sync with Copilot.MODELS below.
@@ -432,9 +470,18 @@ class Copilot(_OpenAICompatible):
         if model not in self.MODELS:
             valid = ", ".join(sorted(self.MODELS))
             raise ValueError(f"Unsupported Copilot model {model!r}. Valid models: {valid}")
+        resolved = _resolve_github_token(api_key)
+        if resolved is None:
+            raise ValueError(
+                "No GitHub token found for Copilot. Supply one via:\n"
+                "  - api_key='ghp_...' constructor argument\n"
+                "  - GITHUB_TOKEN environment variable\n"
+                "  - gh auth login  (GitHub CLI)\n"
+                "  - VS Code GitHub Copilot extension + pip install keyring"
+            )
         super().__init__(
             model=model,
-            api_key=_resolve_github_token(api_key),
+            api_key=resolved,
             api_key_env="GITHUB_TOKEN",
             base_url=self._BASE_URL,
             temperature=temperature,
