@@ -621,23 +621,31 @@ class TestTokenFromKeyring:
 
     def test_secretstorage_returns_plain_token(self):
         mock_ss, mock_ss_exc, _ = _fake_secretstorage({"gh:github.com": ["ghp_from_dbus"]})
-        with patch.dict("sys.modules", {"secretstorage": mock_ss, "secretstorage.exceptions": mock_ss_exc}):
+        with patch.dict(
+            "sys.modules", {"secretstorage": mock_ss, "secretstorage.exceptions": mock_ss_exc}
+        ):
             assert _token_from_keyring() == "ghp_from_dbus"
 
     def test_secretstorage_returns_json_password_field(self):
+        # Standard library imports:
         import json
 
         payload = json.dumps({"account": "alice", "password": "ghp_json_pw"})
         mock_ss, mock_ss_exc, _ = _fake_secretstorage({"vscode.github-authentication": [payload]})
-        with patch.dict("sys.modules", {"secretstorage": mock_ss, "secretstorage.exceptions": mock_ss_exc}):
+        with patch.dict(
+            "sys.modules", {"secretstorage": mock_ss, "secretstorage.exceptions": mock_ss_exc}
+        ):
             assert _token_from_keyring() == "ghp_json_pw"
 
     def test_secretstorage_returns_json_token_field(self):
+        # Standard library imports:
         import json
 
         payload = json.dumps({"token": "ghp_json_tok"})
         mock_ss, mock_ss_exc, _ = _fake_secretstorage({"GitHub.github.com": [payload]})
-        with patch.dict("sys.modules", {"secretstorage": mock_ss, "secretstorage.exceptions": mock_ss_exc}):
+        with patch.dict(
+            "sys.modules", {"secretstorage": mock_ss, "secretstorage.exceptions": mock_ss_exc}
+        ):
             assert _token_from_keyring() == "ghp_json_tok"
 
     def test_secretstorage_skips_binary_secret(self):
@@ -645,7 +653,14 @@ class TestTokenFromKeyring:
         mock_ss, mock_ss_exc, _ = _fake_secretstorage({"gh:github.com": [b"\x00\x01\x02\x03"]})
         mock_keyring = MagicMock()
         mock_keyring.get_password.return_value = None
-        with patch.dict("sys.modules", {"secretstorage": mock_ss, "secretstorage.exceptions": mock_ss_exc, "keyring": mock_keyring}):
+        with patch.dict(
+            "sys.modules",
+            {
+                "secretstorage": mock_ss,
+                "secretstorage.exceptions": mock_ss_exc,
+                "keyring": mock_keyring,
+            },
+        ):
             assert _token_from_keyring() is None
 
     def test_secretstorage_service_not_available_falls_back_to_keyring(self):
@@ -653,7 +668,14 @@ class TestTokenFromKeyring:
         mock_ss.dbus_init.side_effect = FakeSSError()
         mock_keyring = MagicMock()
         mock_keyring.get_password.return_value = "ghp_keyring_fallback"
-        with patch.dict("sys.modules", {"secretstorage": mock_ss, "secretstorage.exceptions": mock_ss_exc, "keyring": mock_keyring}):
+        with patch.dict(
+            "sys.modules",
+            {
+                "secretstorage": mock_ss,
+                "secretstorage.exceptions": mock_ss_exc,
+                "keyring": mock_keyring,
+            },
+        ):
             assert _token_from_keyring() == "ghp_keyring_fallback"
 
     def test_secretstorage_not_installed_falls_back_to_keyring(self):

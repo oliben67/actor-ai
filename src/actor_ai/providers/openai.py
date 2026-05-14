@@ -325,7 +325,7 @@ def _decode_keyring_secret(raw: str) -> str | None:
         data = json.loads(raw)
         if isinstance(data, dict):
             raw = str(data.get("password") or data.get("token") or "")
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         pass
     return raw.strip() or None
 
@@ -342,11 +342,13 @@ def _token_from_keyring() -> str | None:
     # Linux: secretstorage allows attribute-based search without knowing the account name.
     # Resolve the D-Bus exception class first so it is always bound before the try block.
     try:
+        # Third party imports:
         from secretstorage.exceptions import SecretServiceNotAvailableException as _SSError
     except ImportError:
         _SSError = OSError  # placeholder; secretstorage not installed, won't be raised
 
     try:
+        # Third party imports:
         import secretstorage
 
         bus = secretstorage.dbus_init()
@@ -358,10 +360,11 @@ def _token_from_keyring() -> str | None:
                     token = _decode_keyring_secret(raw.decode("utf-8", errors="ignore"))
                     if token:
                         return token
-    except (ImportError, _SSError):
+    except ImportError, _SSError:
         pass
 
     # macOS / Windows: keyring.get_password requires an account name.
+    # Third party imports:
     import keyring
 
     for service in _KEYRING_SERVICES:
@@ -400,7 +403,7 @@ def _resolve_github_token(explicit_key: str | None) -> str | None:
             token = result.stdout.strip()
             if token:
                 return token
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+    except FileNotFoundError, subprocess.TimeoutExpired, OSError:
         pass
     return _token_from_keyring()
 
