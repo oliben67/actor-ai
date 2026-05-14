@@ -512,3 +512,38 @@ class TestOnReceive:
         # Actor should still respond normally afterwards
         result = ref.proxy().instruct("alive?").get()
         assert result == "reply"
+
+
+# ---------------------------------------------------------------------------
+# AIActor without a provider (plain pykka actor behaviour)
+# ---------------------------------------------------------------------------
+
+
+class TestNoProvider:
+    def test_actor_starts_without_provider(self, actor_factory):
+        cls = type("NoProvActor", (AIActor,), {})
+        ref = actor_factory(cls)
+        assert ref is not None
+
+    def test_instruct_raises_runtime_error_without_provider(self, actor_factory):
+        cls = type("NoProvActor2", (AIActor,), {})
+        ref = actor_factory(cls)
+        with pytest.raises(RuntimeError, match="No provider configured"):
+            ref.proxy().instruct("hello").get()
+
+    def test_remember_and_forget_work_without_provider(self, actor_factory):
+        cls = type("NoProvActor3", (AIActor,), {})
+        ref = actor_factory(cls)
+        ref.proxy().remember("k", "v").get()
+        assert ref.proxy().get_memory().get() == {"k": "v"}
+        ref.proxy().forget("k").get()
+        assert ref.proxy().get_memory().get() == {}
+
+    def test_session_methods_work_without_provider(self, actor_factory):
+        cls = type("NoProvActor4", (AIActor,), {})
+        ref = actor_factory(cls)
+        assert ref.proxy().get_session().get() == []
+        ref.proxy().clear_session().get()
+
+    def test_provider_none_is_default(self):
+        assert AIActor.provider is None

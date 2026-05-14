@@ -47,7 +47,7 @@ class UsageSummary:
         )
 
     def __iadd__(self, other: UsageSummary) -> Self:
-        return self.__add__(other) # type: ignore
+        return self.__add__(other)  # type: ignore
 
 
 # ---------------------------------------------------------------------------

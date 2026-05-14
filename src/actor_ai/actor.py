@@ -6,7 +6,7 @@ import pykka
 
 from .accounting import Ledger, MonitoringContext, UsageSummary, new_session_id
 from .messages import Forget, Instruct, Remember
-from .providers import Claude, LLMProvider
+from .providers import LLMProvider
 from .tools import extract_tools
 
 
@@ -63,7 +63,7 @@ class AIActor(pykka.ThreadingActor):
     system_prompt: str = "You are a helpful AI agent."
     max_tokens: int = 4096
     max_history: int = 0
-    provider: LLMProvider = Claude()
+    provider: LLMProvider | None = None
     ledger: Ledger | None = None
     actor_name: str | None = None
     monitoring: bool = False
@@ -107,6 +107,13 @@ class AIActor(pykka.ThreadingActor):
         use_session: bool = True,
     ) -> str:
         """Process a natural language instruction, invoking @tool methods as needed."""
+        if self.provider is None:
+            raise RuntimeError(
+                "No provider configured. Set a provider class attribute:\n"
+                "    class MyActor(AIActor):\n"
+                "        provider = Claude()  # or GPT(), Gemini(), etc."
+            )
+        provider = self.provider
         if history is not None:
             messages = list(history)
         elif use_session:
@@ -129,7 +136,7 @@ class AIActor(pykka.ThreadingActor):
                 session_id=self._session_id,
             )
 
-        reply = self.provider.run(
+        reply = provider.run(
             system=self._effective_system_prompt(),
             messages=messages,
             tools=extract_tools(self),
@@ -142,7 +149,7 @@ class AIActor(pykka.ThreadingActor):
         if self.ledger is not None:
             self.ledger.record(
                 actor_name=self.actor_name or type(self).__name__,
-                model=self.provider.model,
+                model=provider.model,
                 input_tokens=accumulated.input_tokens,
                 output_tokens=accumulated.output_tokens,
                 session_id=self._session_id,

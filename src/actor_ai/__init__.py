@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from .accounting import Ledger, LedgerEntry, ModelRate, MonitoringContext, Rates, UsageSummary
 from .actor import AIActor
-from .chorus import Chorus
+from .chorus import Chorus, ChorusType
 from .messages import Forget, Instruct, Remember
 from .providers import (
     GPT,
@@ -17,10 +17,12 @@ from .providers import (
     Mistral,
 )
 from .tools import tool
+from .workflow import Workflow, WorkflowState, WorkflowTransition
 
 __all__ = [
     "AIActor",
     "Chorus",
+    "ChorusType",
     "Claude",
     "Copilot",
     "CopilotModel",
@@ -39,6 +41,9 @@ __all__ = [
     "Rates",
     "Remember",
     "UsageSummary",
+    "Workflow",
+    "WorkflowState",
+    "WorkflowTransition",
     "tool",
 ]
 

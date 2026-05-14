@@ -1,17 +1,24 @@
 # Future imports (must occur at the beginning of the file):
 from __future__ import annotations
 
+# Standard library imports:
+from typing import Literal
+
 # Third party imports:
 import pykka
 
 from .messages import Forget, Remember
 
+ChorusType = Literal["system", "project", "team", "department", "custom"]
+
 
 class Chorus(pykka.ThreadingActor):
-    """A group of named AIActors that can be instructed individually or together.
+    """A group of named actors that can be instructed individually or together.
 
     The Chorus itself is a pykka actor — all its methods are accessible via
-    proxy and all interaction is thread-safe.
+    proxy and all interaction is thread-safe.  Members can be ``AIActor``
+    instances, other ``Chorus`` instances, or any plain pykka actor that
+    exposes an ``instruct(instruction)`` method.
 
     Example::
 
@@ -30,7 +37,8 @@ class Chorus(pykka.ThreadingActor):
         writer_ref = Writer.start()
 
         chorus_ref = Chorus.start(
-            agents={"researcher": researcher_ref, "writer": writer_ref}
+            type="team",
+            agents={"researcher": researcher_ref, "writer": writer_ref},
         )
 
         # Instruct one agent:
@@ -48,43 +56,64 @@ class Chorus(pykka.ThreadingActor):
         chorus_ref.stop()
     """
 
-    def __init__(self, agents: dict[str, pykka.ActorRef] | None = None) -> None:
+    def __init__(
+        self,
+        agents: dict[str, pykka.ActorRef] | None = None,
+        type: ChorusType = "custom",
+    ) -> None:
         super().__init__()
         self._agents: dict[str, pykka.ActorRef] = dict(agents or {})
+        self.type: ChorusType = type
 
     # ------------------------------------------------------------------ #
-    # Agent management                                                     #
+    # Actor management                                                     #
     # ------------------------------------------------------------------ #
 
     def add(self, name: str, ref: pykka.ActorRef) -> None:
-        """Register a new agent under *name*."""
+        """Register a new actor under *name*."""
         self._agents[name] = ref
 
     def remove(self, name: str) -> None:
-        """Unregister an agent (does not stop it)."""
+        """Unregister an actor (does not stop it)."""
+        self._agents.pop(name, None)
+
+    def join(self, name: str, ref: pykka.ActorRef) -> None:
+        """An actor joins the chorus under *name*."""
+        self._agents[name] = ref
+
+    def leave(self, name: str) -> None:
+        """An actor leaves the chorus (does not stop it)."""
         self._agents.pop(name, None)
 
     def agents(self) -> list[str]:
-        """Return the names of all registered agents."""
+        """Return the names of all registered actors."""
         return list(self._agents.keys())
 
     # ------------------------------------------------------------------ #
     # Instruction routing                                                  #
     # ------------------------------------------------------------------ #
 
-    def instruct(self, name: str, instruction: str, **kwargs) -> str:
-        """Send an instruction to the named agent and return its reply.
+    def instruct(self, name_or_instruction: str, instruction: str | None = None, **kwargs) -> str:
+        """Send an instruction to a named actor or broadcast to all actors.
 
-        Keyword args (``use_session``, ``history``) are forwarded to the
-        agent's ``instruct()`` method via the proxy.
+        Single-argument form — ``instruct(instruction)`` broadcasts to all
+        members and returns each reply formatted as ``"name: reply\\n..."``
+        per member.  This form enables a Chorus to act as a member inside
+        another Chorus (``broadcast`` always calls ``proxy().instruct(text)``).
+
+        Two-argument form — ``instruct(name, instruction)`` routes to the
+        named member and returns its reply directly.
         """
-        ref = self._get(name)
+        if instruction is None:
+            results = self.broadcast(name_or_instruction, **kwargs)
+            return "\n".join(f"{n}: {r}" for n, r in results.items())
+        ref = self._get(name_or_instruction)
         return ref.proxy().instruct(instruction, **kwargs).get()
 
     def broadcast(self, instruction: str, **kwargs) -> dict[str, str]:
-        """Send the same instruction to all agents in parallel.
+        """Send the same instruction to all actors in parallel.
 
-        Returns a dict mapping agent name → reply.
+        Returns a dict mapping actor name → reply.
         """
         futures = {
             name: ref.proxy().instruct(instruction, **kwargs) for name, ref in self._agents.items()
@@ -92,10 +121,10 @@ class Chorus(pykka.ThreadingActor):
         return {name: f.get() for name, f in futures.items()}
 
     def pipeline(self, names: list[str], instruction: str, **kwargs) -> str:
-        """Pass output of each agent as input to the next in *names*.
+        """Pass output of each actor as input to the next in *names*.
 
-        The first agent receives *instruction*; each subsequent agent receives
-        the previous agent's reply.  Returns the final agent's reply.
+        The first actor receives *instruction*; each subsequent actor receives
+        the previous actor's reply.  Returns the final actor's reply.
         """
         if not names:
             raise ValueError("pipeline requires at least one agent name")
@@ -109,34 +138,47 @@ class Chorus(pykka.ThreadingActor):
     # ------------------------------------------------------------------ #
 
     def remember(self, key: str, value: str, names: list[str] | None = None) -> None:
-        """Store a fact in one or all agents' memory.
+        """Store a fact in one or all actors' memory.
 
         Args:
             key: Fact key.
             value: Fact value.
-            names: Agent names to update; ``None`` means all agents.
+            names: Actor names to update; ``None`` means all actors.
         """
         targets = self._resolve(names)
         for ref in targets.values():
             ref.tell(Remember(key, value))
 
     def forget(self, key: str, names: list[str] | None = None) -> None:
-        """Remove a fact from one or all agents' memory.
+        """Remove a fact from one or all actors' memory.
 
         Args:
             key: Fact key to remove.
-            names: Agent names to update; ``None`` means all agents.
+            names: Actor names to update; ``None`` means all actors.
         """
         targets = self._resolve(names)
         for ref in targets.values():
             ref.tell(Forget(key))
 
     # ------------------------------------------------------------------ #
+    # Message handling (enables use as a sub-member in another Chorus)    #
+    # ------------------------------------------------------------------ #
+
+    def on_receive(self, message: object) -> object:
+        if isinstance(message, Remember):
+            self.remember(message.key, message.value)
+            return None
+        if isinstance(message, Forget):
+            self.forget(message.key)
+            return None
+        return super().on_receive(message)
+
+    # ------------------------------------------------------------------ #
     # Lifecycle helpers                                                    #
     # ------------------------------------------------------------------ #
 
     def stop_agents(self, names: list[str] | None = None) -> None:
-        """Stop one or all registered agents (and remove them from the chorus)."""
+        """Stop one or all registered actors (and remove them from the chorus)."""
         targets = self._resolve(names)
         for name, ref in targets.items():
             ref.stop()

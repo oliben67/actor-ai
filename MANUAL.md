@@ -9,10 +9,11 @@
 5. [Tool calling](#5-tool-calling)
 6. [Providers](#6-providers)
 7. [Chorus](#7-chorus)
-8. [Accounting](#8-accounting)
-9. [Monitoring with LiteLLM](#9-monitoring-with-litellm)
-10. [Message API](#10-message-api)
-11. [Complete reference](#11-complete-reference)
+8. [Workflow](#8-workflow)
+9. [Accounting](#9-accounting)
+10. [Monitoring with LiteLLM](#10-monitoring-with-litellm)
+11. [Message API](#11-message-api)
+12. [Complete reference](#12-complete-reference)
 
 ---
 
@@ -68,7 +69,7 @@ class MyAgent(AIActor):
 | Attribute | Type | Default | Description |
 |---|---|---|---|
 | `system_prompt` | `str` | `"You are a helpful AI agent."` | System prompt sent on every call |
-| `provider` | `LLMProvider` | `Claude()` | Which LLM backend to use |
+| `provider` | `LLMProvider \| None` | `None` | Which LLM backend to use; `None` means no provider |
 | `max_tokens` | `int` | `4096` | Maximum completion tokens |
 | `max_history` | `int` | `0` | Keep last N turns; 0 = unlimited |
 | `ledger` | `Ledger \| None` | `None` | Attach for token accounting |
@@ -106,6 +107,34 @@ reply: str = ref.proxy().instruct(
 - When `use_session=True` and `history=None` (default), the actor appends the turn to its session.
 - When `use_session=False`, the call is stateless — the session is not read or written.
 - When `history` is provided, it is used as-is (the session is ignored).
+- Raises `RuntimeError` if `provider` is `None`.
+
+### AIActor without a provider
+
+`provider` defaults to `None`. An actor without a provider behaves like a plain pykka `ThreadingActor` — it can receive messages, manage memory, track session, and communicate with other actors. Calling `instruct()` raises `RuntimeError`.
+
+```python
+from actor_ai import AIActor
+
+class DataActor(AIActor):
+    pass  # no provider — pure actor, no LLM needed
+
+ref = DataActor.start()
+
+# Memory and session still work:
+ref.proxy().remember("context", "quarterly report").get()
+ref.proxy().get_memory().get()   # → {"context": "quarterly report"}
+
+# instruct() raises RuntimeError without a provider:
+try:
+    ref.proxy().instruct("summarise").get()
+except RuntimeError as exc:
+    print(exc)   # "No provider configured. Set a provider class attribute: …"
+
+ref.stop()
+```
+
+This is useful for pure coordination actors, data-processing nodes, or actors that act as sinks in a `Chorus` pipeline without invoking an LLM.
 
 ---
 
@@ -411,7 +440,7 @@ The `Copilot-Integration-Id: vscode-chat` header is sent automatically so GitHub
 
 ### LiteLLM
 
-See [Section 9 — Monitoring with LiteLLM](#9-monitoring-with-litellm) for full details.
+See [Section 10 — Monitoring with LiteLLM](#10-monitoring-with-litellm) for full details.
 
 ```python
 from actor_ai import LiteLLM
@@ -437,10 +466,10 @@ The next `instruct()` call will use the new provider.
 
 ## 7. Chorus
 
-`Chorus` manages a named group of `AIActor` instances and provides three coordination patterns.
+`Chorus` manages a named group of actors and provides three coordination patterns. Members can be `AIActor` instances, other `Chorus` instances, or any plain pykka actor that exposes an `instruct()` method.
 
 ```python
-from actor_ai import AIActor, Chorus, Claude, GPT
+from actor_ai import AIActor, Chorus, ChorusType, Claude, GPT
 
 class Researcher(AIActor):
     system_prompt = "You are a research specialist."
@@ -454,9 +483,31 @@ researcher_ref = Researcher.start()
 writer_ref     = Writer.start()
 
 chorus_ref = Chorus.start(
-    agents={"researcher": researcher_ref, "writer": writer_ref}
+    agents={"researcher": researcher_ref, "writer": writer_ref},
+    type="team",
 )
 chorus = chorus_ref.proxy()
+```
+
+### ChorusType
+
+`ChorusType` is a `Literal` type that describes the role of a Chorus:
+
+```python
+from actor_ai import ChorusType
+
+# Valid values
+"system"      # system-level coordination layer
+"project"     # project-scoped group
+"team"        # functional team
+"department"  # department-level grouping
+"custom"      # default — any other purpose
+```
+
+Read the type via the proxy:
+
+```python
+t: ChorusType = chorus.type.get()   # → "team"
 ```
 
 ### Coordination patterns
@@ -466,7 +517,13 @@ chorus = chorus_ref.proxy()
 reply: str = chorus.instruct("researcher", "Find facts about Mars.").get()
 ```
 
-**broadcast** — send to all agents in parallel:
+**instruct (broadcast form)** — when called with a single argument, broadcasts to all members and returns a formatted `"name: reply\n…"` string:
+```python
+combined: str = chorus.instruct("Introduce yourself.").get()
+# → "researcher: I am a research specialist …\nwriter: I am a creative writer …"
+```
+
+**broadcast** — send to all agents in parallel, returns a dict:
 ```python
 replies: dict[str, str] = chorus.broadcast("Introduce yourself.").get()
 # {"researcher": "I am …", "writer": "I am …"}
@@ -483,9 +540,13 @@ final: str = chorus.pipeline(
 ### Agent management
 
 ```python
-# Add / remove at runtime
+# Add / remove at construction or runtime
 chorus.add("editor", editor_ref).get()
 chorus.remove("editor").get()
+
+# Semantic aliases for add / remove
+chorus.join("reviewer", reviewer_ref).get()   # same as add()
+chorus.leave("reviewer").get()                # same as remove()
 
 # List agents
 names: list[str] = chorus.agents().get()
@@ -498,6 +559,8 @@ chorus.stop_agents().get()
 ```
 
 ### Memory broadcast
+
+`remember()` / `forget()` calls propagate to **all members** automatically, including nested choruses and non-AI actors (if they expose the matching method):
 
 ```python
 # Store a fact in all agents
@@ -513,13 +576,271 @@ chorus.forget("style").get()
 chorus.forget("audience", names=["writer"]).get()
 ```
 
+Memory propagation also works via the message API: `ref.tell(Remember("key", "val"))` delivered to a Chorus is forwarded to all members.
+
+### Nested choruses
+
+A `Chorus` can be a member of another `Chorus`. `broadcast()` and memory propagation cascade correctly through nesting:
+
+```python
+inner = Chorus.start(agents={"a": a_ref, "b": b_ref}, type="team")
+outer = Chorus.start(agents={"inner": inner, "c": c_ref}, type="department")
+
+# Broadcasts to inner (which broadcasts to a and b) and to c
+outer.proxy().broadcast("Announce yourselves.").get()
+
+# Memory flows to a, b, and c
+outer.proxy().remember("project", "Atlas").get()
+```
+
+### Non-AI actors as members
+
+Any pykka actor that exposes an `instruct(instruction)` method can be a Chorus member. Plain actors do not need to extend `AIActor`:
+
+```python
+import pykka
+
+class LoggingActor(pykka.ThreadingActor):
+    def instruct(self, instruction: str) -> str:
+        print(f"[LOG] {instruction}")
+        return "logged"
+
+logger_ref = LoggingActor.start()
+chorus_ref = Chorus.start(agents={"logger": logger_ref, "writer": writer_ref})
+```
+
 ### Stopping
 
 `chorus_ref.stop()` stops the Chorus actor itself. Registered sub-agents are **not** stopped automatically — call `chorus.stop_agents()` first or stop them individually.
 
 ---
 
-## 8. Accounting
+## 8. Workflow
+
+`Workflow` implements a state machine that orchestrates actors and Choruses. Transitions fire either when a reply matches a guard predicate or when a named event is dispatched. States and transitions can be added, replaced, or removed at runtime on a live workflow.
+
+### Building blocks
+
+**WorkflowState** maps a state name to an actor (or group of parallel actors) plus an instruction template:
+
+```python
+from actor_ai import WorkflowState
+
+# Single actor or Chorus
+WorkflowState(chorus=review_chorus, instruction="Review this:\n{output}")
+
+# Parallel actors — all fired simultaneously, replies combined as "name: reply\n…"
+WorkflowState(
+    chorus={"researcher": researcher_ref, "critic": critic_ref},
+    instruction="Analyse: {input}",
+)
+```
+
+**Instruction templates** support two placeholders:
+
+| Placeholder | Expands to |
+|---|---|
+| `{input}` | The original instruction passed to `run()` / `step()` |
+| `{output}` | The reply produced by the immediately preceding state |
+
+Literal braces that are not template markers must be doubled (`{{` / `}}`).
+
+**WorkflowTransition** is a directed edge:
+
+```python
+from actor_ai import WorkflowTransition
+
+# Guard — fires automatically when the reply matches a predicate
+WorkflowTransition("draft", "review", guard=lambda r: "ready" in r)
+
+# Event — fires when Workflow.event(name) is called
+WorkflowTransition("review", "draft", on_event="reject")
+
+# Both — first matching condition wins
+WorkflowTransition("analyse", "approve",
+                   guard=lambda r: "approved" in r,
+                   on_event="force_approve")
+```
+
+### Creating a workflow
+
+```python
+from actor_ai import Workflow, WorkflowState, WorkflowTransition
+
+wf = Workflow.start(
+    states={
+        "draft":  WorkflowState(draft_chorus,  instruction="{input}"),
+        "review": WorkflowState(review_chorus, instruction="Review:\n{output}"),
+    },
+    transitions=[
+        WorkflowTransition("draft", "review", guard=lambda r: "ready" in r),
+        WorkflowTransition("review", "draft", on_event="reject"),
+    ],
+    initial_state="draft",
+)
+```
+
+### Blocking execution — run() and step()
+
+**`run(instruction)`** — executes from the current state and follows guard transitions until no guard matches (terminal state). Event-only transitions do not block `run()`. Blocks the calling thread until complete.
+
+```python
+output: str = wf.proxy().run("Draft a proposal.").get()
+```
+
+**`step(instruction)`** — executes the current state exactly once and applies the first matching guard transition. Does not loop.
+
+```python
+out1 = wf.proxy().step("Begin the process.").get()
+# current state may have advanced via guard
+out2 = wf.proxy().step().get()   # instruction=None → uses last output as {input}
+```
+
+### Event transitions
+
+Fire a named event to trigger an event-based transition from the current state:
+
+```python
+fired: bool = wf.proxy().event("reject").get()
+# True if a matching transition was found; False otherwise
+```
+
+### Non-blocking execution — run_detached()
+
+`run_detached()` launches the workflow loop in a background OS thread so the workflow actor's mailbox stays free for `event()` and management calls during execution.
+
+```python
+import threading
+
+done = threading.Event()
+
+wf.proxy().run_detached(
+    "Draft a proposal.",
+    on_complete=lambda output: done.set(),
+    on_error=lambda exc: print("Error:", exc),
+).get()
+
+# Actor mailbox is free — fire events while the run is in progress
+wf.proxy().event("approve").get()
+
+done.wait(timeout=30)
+```
+
+The three-phase protocol used internally:
+
+1. **Prepare** (`prepare_step`) — actor atomically reads the current state and formats the instruction.
+2. **Execute** — the actor(s) are invoked outside the workflow thread (slow, actor is free).
+3. **Commit** (`commit_step`) — actor atomically stores the output and advances the state.
+
+You can use `prepare_step` / `commit_step` directly for custom orchestration (see [Section 8 — Complete reference](#12-complete-reference)).
+
+### Runtime modification
+
+States and transitions can be added or replaced on a running workflow:
+
+```python
+# Add a new state
+wf.proxy().add_state(
+    "approve",
+    WorkflowState(approve_chorus, instruction="Finalise:\n{output}")
+).get()
+
+# Add a new transition
+wf.proxy().add_transition(
+    WorkflowTransition("review", "approve", on_event="approve")
+).get()
+
+# Remove a state
+wf.proxy().remove_state("old_state").get()
+
+# Remove transitions from a source
+wf.proxy().remove_transitions("review").get()               # all from "review"
+wf.proxy().remove_transitions("review", "draft").get()      # only review→draft
+```
+
+### State inspection and control
+
+```python
+# Force-jump to any registered state (raises KeyError if unknown)
+wf.proxy().set_state("review").get()
+
+# Read current state and last output
+state: str | None = wf.proxy().current_state().get()
+output: str       = wf.proxy().last_output().get()
+
+# List all registered state names
+names: list[str] = wf.proxy().states().get()
+```
+
+### Parallel actor states
+
+Pass a `dict[str, ActorRef]` as `chorus` to fire multiple actors simultaneously. All actors receive the same instruction; their replies are combined as `"name: reply\n…"`:
+
+```python
+WorkflowState(
+    chorus={"researcher": r_ref, "critic": c_ref},
+    instruction="Analyse: {input}",
+)
+# Combined output: "researcher: …\ncritic: …"
+```
+
+Guard predicates receive the combined string, so you can match keywords from any actor:
+
+```python
+WorkflowTransition(
+    "analyse", "summarise",
+    guard=lambda r: "approved" in r   # matches if any actor replied "approved"
+)
+```
+
+### Complete workflow example
+
+```python
+from actor_ai import AIActor, Chorus, Claude, Workflow, WorkflowState, WorkflowTransition
+
+class Drafter(AIActor):
+    system_prompt = "You draft documents."
+    provider = Claude()
+
+class Reviewer(AIActor):
+    system_prompt = "You review documents for quality."
+    provider = Claude()
+
+class Approver(AIActor):
+    system_prompt = "You give final sign-off."
+    provider = Claude()
+
+drafter_ref  = Drafter.start()
+reviewer_ref = Reviewer.start()
+approver_ref = Approver.start()
+
+draft_chorus  = Chorus.start(agents={"drafter":  drafter_ref})
+review_chorus = Chorus.start(agents={"reviewer": reviewer_ref})
+approve_chorus= Chorus.start(agents={"approver": approver_ref})
+
+wf = Workflow.start(
+    states={
+        "draft":   WorkflowState(draft_chorus,   instruction="{input}"),
+        "review":  WorkflowState(review_chorus,  instruction="Review:\n{output}"),
+        "approve": WorkflowState(approve_chorus, instruction="Finalise:\n{output}"),
+    },
+    transitions=[
+        WorkflowTransition("draft",  "review",  guard=lambda r: "ready" in r),
+        WorkflowTransition("review", "approve", guard=lambda r: "approved" in r),
+        WorkflowTransition("review", "draft",   on_event="reject"),
+    ],
+    initial_state="draft",
+)
+
+# Blocking run — follows guard chain until terminal
+output = wf.proxy().run("Please draft a Q3 proposal.").get()
+
+wf.stop()
+```
+
+---
+
+## 9. Accounting
 
 The accounting layer records every `instruct()` call and calculates token spend.
 
@@ -641,7 +962,7 @@ Always verify current rates at each provider's pricing page before use in produc
 
 ---
 
-## 9. Monitoring with LiteLLM
+## 10. Monitoring with LiteLLM
 
 When `monitoring = True`, the actor creates a `MonitoringContext` for every `instruct()` call and passes it to the provider. The `LiteLLM` provider forwards this context as the `metadata` kwarg to `litellm.completion()`, making it visible to any registered callbacks (Langfuse, Helicone, custom, etc.).
 
@@ -716,7 +1037,7 @@ The `monitoring_context` parameter is passed to every provider's `run()` method.
 
 ---
 
-## 10. Message API
+## 11. Message API
 
 As a pykka actor, `AIActor` accepts raw message objects in addition to the proxy API.
 
@@ -765,7 +1086,7 @@ pykka processes messages in FIFO order, so a `tell(Remember(…))` followed by `
 
 ---
 
-## 11. Complete reference
+## 12. Complete reference
 
 ### AIActor public API
 
@@ -790,17 +1111,77 @@ get_session_id() -> str
 # Agent management
 add(name: str, ref: ActorRef) -> None
 remove(name: str) -> None
+join(name: str, ref: ActorRef) -> None    # alias for add()
+leave(name: str) -> None                  # alias for remove()
 agents() -> list[str]
 stop_agents(names: list[str] | None = None) -> None
 
 # Coordination
-instruct(name: str, instruction: str, **kwargs) -> str
+instruct(instruction: str) -> str                          # broadcast form (single arg)
+instruct(name: str, instruction: str, **kwargs) -> str     # single-agent form (two args)
 broadcast(instruction: str, **kwargs) -> dict[str, str]
 pipeline(names: list[str], instruction: str, **kwargs) -> str
 
 # Memory broadcast
 remember(key: str, value: str, names: list[str] | None = None) -> None
 forget(key: str, names: list[str] | None = None) -> None
+
+# Type
+type: ChorusType   # attribute (readable via proxy)
+```
+
+### Workflow public API
+
+```python
+# State machine management
+add_state(name: str, state: WorkflowState) -> None
+remove_state(name: str) -> None
+add_transition(transition: WorkflowTransition) -> None
+remove_transitions(source: str, target: str | None = None) -> None
+set_state(name: str) -> None              # raises KeyError if unknown
+
+# Inspection
+states() -> list[str]
+current_state() -> str | None
+last_output() -> str
+
+# Blocking execution
+step(instruction: str | None = None) -> str
+run(instruction: str | None = None) -> str
+
+# Non-blocking execution
+run_detached(
+    instruction: str | None = None,
+    on_complete: Callable[[str], None] | None = None,
+    on_error: Callable[[Exception], None] | None = None,
+) -> None
+
+# Event dispatch
+event(name: str) -> bool
+
+# Low-level coordination (used by run_detached; available for custom orchestration)
+prepare_step(instruction: str | None) -> tuple[ActorRef | dict[str, ActorRef], str] | None
+commit_step(output: str) -> bool
+```
+
+### WorkflowState
+
+```python
+@dataclass
+class WorkflowState:
+    chorus: pykka.ActorRef | dict[str, pykka.ActorRef]
+    instruction: str = "{output}"
+```
+
+### WorkflowTransition
+
+```python
+@dataclass
+class WorkflowTransition:
+    source: str
+    target: str
+    on_event: str | None = None
+    guard: Callable[[str], bool] | None = None
 ```
 
 ### Ledger public API
@@ -861,7 +1242,9 @@ The decorated method must be a regular instance method on an `AIActor` subclass.
 ```python
 from actor_ai import (
     # Actors
-    AIActor, Chorus,
+    AIActor, Chorus, ChorusType,
+    # Workflow
+    Workflow, WorkflowState, WorkflowTransition,
     # Providers
     Claude, Copilot, CopilotModel, GPT, Gemini, Mistral, DeepSeek, LiteLLM, LLMProvider,
     # Messages

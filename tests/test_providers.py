@@ -20,6 +20,7 @@ from actor_ai.providers.openai import (
     DeepSeek,
     Gemini,
     Mistral,
+    _decode_keyring_secret,
     _to_openai_tool,
     _token_from_keyring,
 )
@@ -206,6 +207,26 @@ class TestClaude:
         assert tool_result_msg["content"][0]["type"] == "tool_result"
         assert tool_result_msg["content"][0]["tool_use_id"] == "tu_abc"
         assert tool_result_msg["content"][0]["content"] == "result_value"
+
+    def test_run_tool_use_with_non_tool_blocks_in_content(self):
+        # stop_reason="tool_use" but content contains a text block alongside the
+        # tool_use block — the text block's `if block.type == "tool_use":` branch
+        # is False and the block is skipped (only tool_use blocks are dispatched).
+        dispatcher = MagicMock(return_value="42")
+        mixed_text = SimpleNamespace(type="text", text="I will call a tool.")
+        provider = self._provider(
+            [
+                anthropic_response(
+                    "tool_use",
+                    mixed_text,
+                    tool_use_block("add", {"a": 1, "b": 2}),
+                ),
+                anthropic_response("end_turn", text_block("The answer is 42.")),
+            ]
+        )
+        result = provider.run("sys", [], [], dispatcher, 1024)
+        assert result == "The answer is 42."
+        dispatcher.assert_called_once_with("add", {"a": 1, "b": 2})
 
 
 # ---------------------------------------------------------------------------
@@ -703,6 +724,35 @@ class TestTokenFromKeyring:
             with patch.dict("sys.modules", {"keyring": mock_keyring}):
                 assert _token_from_keyring() == "ghp_second"
 
+    def test_secretstorage_skips_empty_secret_bytes(self):
+        # Item found but get_secret() returns b"" → if secret_bytes: is False
+        mock_ss, mock_ss_exc, _ = _fake_secretstorage({"gh:github.com": [b""]})
+        mock_keyring = MagicMock()
+        mock_keyring.get_password.return_value = None
+        with patch.dict(
+            "sys.modules",
+            {
+                "secretstorage": mock_ss,
+                "secretstorage.exceptions": mock_ss_exc,
+                "keyring": mock_keyring,
+            },
+        ):
+            assert _token_from_keyring() is None
+
+    def test_keyring_skips_non_printable_password(self):
+        # get_password returns non-printable bytes → _decode_keyring_secret returns None
+        mock_keyring = MagicMock()
+        mock_keyring.get_password.return_value = "\x01\x02\x03"
+        with _no_secretstorage():
+            with patch.dict("sys.modules", {"keyring": mock_keyring}):
+                assert _token_from_keyring() is None
+
+    def test_decode_keyring_secret_json_non_dict_returns_raw(self):
+        # Valid JSON but not a dict → isinstance(data, dict) is False → raw unchanged
+        raw = json.dumps(["list", "value"])
+        result = _decode_keyring_secret(raw)
+        assert result == raw
+
 
 # ---------------------------------------------------------------------------
 # Copilot provider
@@ -820,6 +870,23 @@ class TestCopilotProvider:
                 with pytest.raises(ValueError, match="No GitHub token found for Copilot"):
                     with patch("actor_ai.providers.openai.OpenAI"):
                         Copilot()
+
+    def test_gh_cli_zero_exit_empty_stdout_falls_through_to_keyring(self, monkeypatch):
+        # returncode=0 but stdout is empty → if token: is False → falls through to keyring
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = ""
+        captured: dict = {}
+        with patch("actor_ai.providers.openai.subprocess.run", return_value=mock_result):
+            with patch(
+                "actor_ai.providers.openai._token_from_keyring",
+                return_value="ghp_from_keyring",
+            ):
+                with patch("actor_ai.providers.openai.OpenAI") as mock_oai:
+                    mock_oai.side_effect = lambda **kw: captured.update(kw) or MagicMock()
+                    Copilot()
+        assert captured.get("api_key") == "ghp_from_keyring"
 
     def test_error_message_lists_all_auth_options(self, monkeypatch):
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
