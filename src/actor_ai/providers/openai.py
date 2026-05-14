@@ -341,36 +341,34 @@ def _token_from_keyring() -> str | None:
     """
     # Linux: secretstorage allows attribute-based search without knowing the account name.
     # Resolve the D-Bus exception class first so it is always bound before the try block.
+    _SSError: type[Exception]
     try:
-        # Third party imports:
         from secretstorage.exceptions import SecretServiceNotAvailableException as _SSError
     except ImportError:
         _SSError = OSError  # placeholder; secretstorage not installed, won't be raised
 
     try:
-        # Third party imports:
         import secretstorage
 
         bus = secretstorage.dbus_init()
         collection = secretstorage.get_default_collection(bus)
         for service in _KEYRING_SERVICES:
             for item in collection.search_items({"service": service}):
-                raw = item.get_secret()
-                if raw:
-                    token = _decode_keyring_secret(raw.decode("utf-8", errors="ignore"))
+                secret_bytes = item.get_secret()
+                if secret_bytes:
+                    token = _decode_keyring_secret(secret_bytes.decode("utf-8", errors="ignore"))
                     if token:
                         return token
-    except ImportError, _SSError:
+    except (ImportError, _SSError):  # type: ignore[misc]
         pass
 
     # macOS / Windows: keyring.get_password requires an account name.
-    # Third party imports:
     import keyring
 
     for service in _KEYRING_SERVICES:
-        raw = keyring.get_password(service, "github.com")
-        if raw:
-            token = _decode_keyring_secret(raw)
+        secret_str = keyring.get_password(service, "github.com")
+        if secret_str:
+            token = _decode_keyring_secret(secret_str)
             if token:
                 return token
     return None
