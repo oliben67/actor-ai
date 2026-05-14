@@ -343,11 +343,13 @@ def _token_from_keyring() -> str | None:
     # Resolve the D-Bus exception class first so it is always bound before the try block.
     _SSError: type[Exception]
     try:
+        # Third party imports:
         from secretstorage.exceptions import SecretServiceNotAvailableException as _SSError
     except ImportError:
         _SSError = OSError  # placeholder; secretstorage not installed, won't be raised
 
     try:
+        # Third party imports:
         import secretstorage
 
         bus = secretstorage.dbus_init()
@@ -359,10 +361,11 @@ def _token_from_keyring() -> str | None:
                     token = _decode_keyring_secret(secret_bytes.decode("utf-8", errors="ignore"))
                     if token:
                         return token
-    except (ImportError, _SSError):  # type: ignore[misc]
+    except ImportError, _SSError:  # type: ignore[misc]
         pass
 
     # macOS / Windows: keyring.get_password requires an account name.
+    # Third party imports:
     import keyring
 
     for service in _KEYRING_SERVICES:
