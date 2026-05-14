@@ -36,7 +36,25 @@ ref.stop()
 | `Gemini` | Google AI (OpenAI-compat) | `GOOGLE_API_KEY` |
 | `Mistral` | Mistral AI | `MISTRAL_API_KEY` |
 | `DeepSeek` | DeepSeek | `DEEPSEEK_API_KEY` |
+| `Copilot` | GitHub Copilot (OpenAI-compat) | `GITHUB_TOKEN` |
 | `LiteLLM` | Any (100+ models) | depends on model |
+
+`Copilot` routes requests through GitHub Copilot's OpenAI-compatible endpoint and supports multiple underlying models from a single token:
+
+```python
+from actor_ai import AIActor, Copilot
+
+class Assistant(AIActor):
+    system_prompt = "You are a helpful coding assistant."
+    provider = Copilot()                    # gpt-4o (default)
+    provider = Copilot("claude-sonnet-4-5") # Claude via Copilot
+    provider = Copilot("gemini-2.0-flash")  # Gemini via Copilot
+
+# See all valid model strings at runtime
+print(Copilot.MODELS)
+```
+
+Valid models: `gpt-4o`, `gpt-4o-mini`, `o1`, `o1-mini`, `o3-mini`, `claude-sonnet-4-5`, `gemini-2.0-flash`. Passing any other string raises `ValueError` immediately at construction time.
 
 ## Key features
 

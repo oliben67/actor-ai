@@ -347,6 +347,62 @@ provider = DeepSeek("deepseek-reasoner", temperature=0.0, seed=0)
 
 Reads `DEEPSEEK_API_KEY`.
 
+### Copilot (GitHub)
+
+Routes requests through GitHub Copilot's OpenAI-compatible endpoint (`https://api.githubcopilot.com`). Requires a GitHub account with an active Copilot subscription (Individual, Business, or Enterprise). Reads `GITHUB_TOKEN` from the environment.
+
+```python
+from actor_ai import AIActor, Copilot
+
+class Assistant(AIActor):
+    system_prompt = "You are a helpful coding assistant."
+    provider = Copilot()                        # gpt-4o (default)
+    provider = Copilot("claude-sonnet-4-5")     # Claude via Copilot
+    provider = Copilot("gemini-2.0-flash",
+                       temperature=0.2,
+                       seed=42)
+
+# Inspect valid models at runtime
+print(Copilot.MODELS)   # frozenset of valid model strings
+```
+
+#### Valid models
+
+| Model | Notes |
+|---|---|
+| `gpt-4o` | Default |
+| `gpt-4o-mini` | |
+| `o1` | |
+| `o1-mini` | |
+| `o3-mini` | |
+| `claude-sonnet-4-5` | Anthropic Claude via Copilot |
+| `gemini-2.0-flash` | Google Gemini via Copilot |
+
+Passing any other model string raises `ValueError` immediately at construction time — before any network call. Use `Copilot.MODELS` (a `frozenset[str]`) for runtime validation, or rely on the `CopilotModel` `Literal` type for IDE autocompletion.
+
+```python
+from actor_ai import CopilotModel   # Literal["gpt-4o", "gpt-4o-mini", ...]
+
+try:
+    Copilot("gpt-3.5-turbo")
+except ValueError as exc:
+    print(exc)   # Unsupported Copilot model 'gpt-3.5-turbo'. Valid models: ...
+```
+
+#### Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `model` | `CopilotModel` | Default: `"gpt-4o"` |
+| `api_key` | `str \| None` | GitHub token; overrides `GITHUB_TOKEN` |
+| `temperature` | `float \| None` | Sampling temperature |
+| `top_p` | `float \| None` | Nucleus-sampling probability mass |
+| `timeout` | `float \| None` | HTTP timeout in seconds |
+| `stop` | `list[str] \| str \| None` | Stop sequences |
+| `seed` | `int \| None` | Deterministic sampling (best-effort) |
+
+The `Copilot-Integration-Id: vscode-chat` header is sent automatically so GitHub's backend routes the request correctly.
+
 ### LiteLLM
 
 See [Section 9 — Monitoring with LiteLLM](#9-monitoring-with-litellm) for full details.
@@ -801,7 +857,7 @@ from actor_ai import (
     # Actors
     AIActor, Chorus,
     # Providers
-    Claude, GPT, Gemini, Mistral, DeepSeek, LiteLLM, LLMProvider,
+    Claude, Copilot, CopilotModel, GPT, Gemini, Mistral, DeepSeek, LiteLLM, LLMProvider,
     # Messages
     Instruct, Remember, Forget,
     # Accounting
