@@ -21,7 +21,7 @@ from actor_ai.providers.openai import (
     Gemini,
     Mistral,
     _to_openai_tool,
-    _token_from_vscode_keyring,
+    _token_from_keyring,
 )
 
 # ---------------------------------------------------------------------------
@@ -579,54 +579,107 @@ class TestGPTConfiguration:
 
 
 # ---------------------------------------------------------------------------
-# _token_from_vscode_keyring
+# _token_from_keyring
 # ---------------------------------------------------------------------------
 
 
-class TestTokenFromVscodeKeyring:
-    def test_returns_none_when_keyring_not_installed(self):
-        with patch.dict("sys.modules", {"keyring": None}):
-            assert _token_from_vscode_keyring() is None
+def _fake_secretstorage(service_tokens: dict | None = None):
+    """Build a (mock_ss, mock_ss_exc, FakeSSError) triple for patching sys.modules."""
 
-    def test_returns_none_when_no_entry_found(self):
+    class FakeSSError(Exception):
+        pass
+
+    mock_ss_exc = MagicMock()
+    mock_ss_exc.SecretServiceNotAvailableException = FakeSSError
+
+    mock_ss = MagicMock()
+
+    def _search(attrs):
+        svc = attrs.get("service", "")
+        tokens = (service_tokens or {}).get(svc, [])
+        items = []
+        for tok in tokens:
+            item = MagicMock()
+            item.get_secret.return_value = tok.encode() if isinstance(tok, str) else tok
+            items.append(item)
+        return items
+
+    mock_ss.get_default_collection.return_value.search_items.side_effect = _search
+    return mock_ss, mock_ss_exc, FakeSSError
+
+
+def _no_secretstorage():
+    """Patch dict that makes secretstorage unavailable (ImportError on import)."""
+    return patch.dict(
+        "sys.modules",
+        {"secretstorage": None, "secretstorage.exceptions": None},
+    )
+
+
+class TestTokenFromKeyring:
+    # ── secretstorage (Linux D-Bus) path ──────────────────────────────────────
+
+    def test_secretstorage_returns_plain_token(self):
+        mock_ss, mock_ss_exc, _ = _fake_secretstorage({"gh:github.com": ["ghp_from_dbus"]})
+        with patch.dict("sys.modules", {"secretstorage": mock_ss, "secretstorage.exceptions": mock_ss_exc}):
+            assert _token_from_keyring() == "ghp_from_dbus"
+
+    def test_secretstorage_returns_json_password_field(self):
+        import json
+
+        payload = json.dumps({"account": "alice", "password": "ghp_json_pw"})
+        mock_ss, mock_ss_exc, _ = _fake_secretstorage({"vscode.github-authentication": [payload]})
+        with patch.dict("sys.modules", {"secretstorage": mock_ss, "secretstorage.exceptions": mock_ss_exc}):
+            assert _token_from_keyring() == "ghp_json_pw"
+
+    def test_secretstorage_returns_json_token_field(self):
+        import json
+
+        payload = json.dumps({"token": "ghp_json_tok"})
+        mock_ss, mock_ss_exc, _ = _fake_secretstorage({"GitHub.github.com": [payload]})
+        with patch.dict("sys.modules", {"secretstorage": mock_ss, "secretstorage.exceptions": mock_ss_exc}):
+            assert _token_from_keyring() == "ghp_json_tok"
+
+    def test_secretstorage_skips_binary_secret(self):
+        # Binary data (e.g. encrypted snap secret) must not be returned
+        mock_ss, mock_ss_exc, _ = _fake_secretstorage({"gh:github.com": [b"\x00\x01\x02\x03"]})
         mock_keyring = MagicMock()
         mock_keyring.get_password.return_value = None
-        with patch.dict("sys.modules", {"keyring": mock_keyring}):
-            assert _token_from_vscode_keyring() is None
+        with patch.dict("sys.modules", {"secretstorage": mock_ss, "secretstorage.exceptions": mock_ss_exc, "keyring": mock_keyring}):
+            assert _token_from_keyring() is None
 
-    def test_returns_plain_token_string(self):
+    def test_secretstorage_service_not_available_falls_back_to_keyring(self):
+        mock_ss, mock_ss_exc, FakeSSError = _fake_secretstorage()
+        mock_ss.dbus_init.side_effect = FakeSSError()
+        mock_keyring = MagicMock()
+        mock_keyring.get_password.return_value = "ghp_keyring_fallback"
+        with patch.dict("sys.modules", {"secretstorage": mock_ss, "secretstorage.exceptions": mock_ss_exc, "keyring": mock_keyring}):
+            assert _token_from_keyring() == "ghp_keyring_fallback"
+
+    def test_secretstorage_not_installed_falls_back_to_keyring(self):
+        mock_keyring = MagicMock()
+        mock_keyring.get_password.return_value = "ghp_keyring_only"
+        with _no_secretstorage():
+            with patch.dict("sys.modules", {"keyring": mock_keyring}):
+                assert _token_from_keyring() == "ghp_keyring_only"
+
+    # ── keyring.get_password (macOS / Windows) fallback ───────────────────────
+
+    def test_keyring_tries_all_services_returns_none(self):
+        mock_keyring = MagicMock()
+        mock_keyring.get_password.return_value = None
+        with _no_secretstorage():
+            with patch.dict("sys.modules", {"keyring": mock_keyring}):
+                assert _token_from_keyring() is None
+
+    def test_keyring_second_service_match(self):
         mock_keyring = MagicMock()
         mock_keyring.get_password.side_effect = lambda svc, acct: (
-            "ghp_plain_token" if svc == "vscode.github-authentication" else None
+            "ghp_second" if svc == "GitHub.github.com" else None
         )
-        with patch.dict("sys.modules", {"keyring": mock_keyring}):
-            assert _token_from_vscode_keyring() == "ghp_plain_token"
-
-    def test_extracts_password_field_from_json(self):
-        import json
-
-        mock_keyring = MagicMock()
-        mock_keyring.get_password.return_value = json.dumps(
-            {"account": "oliben67", "password": "ghp_from_json_password"}
-        )
-        with patch.dict("sys.modules", {"keyring": mock_keyring}):
-            assert _token_from_vscode_keyring() == "ghp_from_json_password"
-
-    def test_extracts_token_field_from_json(self):
-        import json
-
-        mock_keyring = MagicMock()
-        mock_keyring.get_password.return_value = json.dumps({"token": "ghp_from_json_token"})
-        with patch.dict("sys.modules", {"keyring": mock_keyring}):
-            assert _token_from_vscode_keyring() == "ghp_from_json_token"
-
-    def test_tries_second_service_when_first_returns_none(self):
-        mock_keyring = MagicMock()
-        mock_keyring.get_password.side_effect = lambda svc, acct: (
-            "ghp_second_service" if svc == "GitHub.github.com" else None
-        )
-        with patch.dict("sys.modules", {"keyring": mock_keyring}):
-            assert _token_from_vscode_keyring() == "ghp_second_service"
+        with _no_secretstorage():
+            with patch.dict("sys.modules", {"keyring": mock_keyring}):
+                assert _token_from_keyring() == "ghp_second"
 
 
 # ---------------------------------------------------------------------------
@@ -730,7 +783,7 @@ class TestCopilotProvider:
     def test_gh_cli_not_found_raises_clear_error(self, monkeypatch):
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
         with patch("actor_ai.providers.openai.subprocess.run", side_effect=FileNotFoundError):
-            with patch("actor_ai.providers.openai._token_from_vscode_keyring", return_value=None):
+            with patch("actor_ai.providers.openai._token_from_keyring", return_value=None):
                 with pytest.raises(ValueError, match="No GitHub token found for Copilot"):
                     with patch("actor_ai.providers.openai.OpenAI"):
                         Copilot()
@@ -741,7 +794,7 @@ class TestCopilotProvider:
         mock_result.returncode = 1
         mock_result.stdout = ""
         with patch("actor_ai.providers.openai.subprocess.run", return_value=mock_result):
-            with patch("actor_ai.providers.openai._token_from_vscode_keyring", return_value=None):
+            with patch("actor_ai.providers.openai._token_from_keyring", return_value=None):
                 with pytest.raises(ValueError, match="No GitHub token found for Copilot"):
                     with patch("actor_ai.providers.openai.OpenAI"):
                         Copilot()
@@ -749,7 +802,7 @@ class TestCopilotProvider:
     def test_error_message_lists_all_auth_options(self, monkeypatch):
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
         with patch("actor_ai.providers.openai.subprocess.run", side_effect=FileNotFoundError):
-            with patch("actor_ai.providers.openai._token_from_vscode_keyring", return_value=None):
+            with patch("actor_ai.providers.openai._token_from_keyring", return_value=None):
                 with pytest.raises(ValueError) as exc:
                     with patch("actor_ai.providers.openai.OpenAI"):
                         Copilot()
@@ -758,7 +811,7 @@ class TestCopilotProvider:
         assert "gh auth login" in msg
         assert "keyring" in msg
 
-    def test_falls_back_to_vscode_keyring(self, monkeypatch):
+    def test_falls_back_to_keyring(self, monkeypatch):
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
         mock_result = MagicMock()
         mock_result.returncode = 1
@@ -766,7 +819,7 @@ class TestCopilotProvider:
         captured: dict = {}
         with patch("actor_ai.providers.openai.subprocess.run", return_value=mock_result):
             with patch(
-                "actor_ai.providers.openai._token_from_vscode_keyring",
+                "actor_ai.providers.openai._token_from_keyring",
                 return_value="ghp_from_vscode",
             ):
                 with patch("actor_ai.providers.openai.OpenAI") as mock_oai:

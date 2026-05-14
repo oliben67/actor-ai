@@ -306,39 +306,70 @@ class DeepSeek(_OpenAICompatible):
         )
 
 
-_VSCODE_KEYRING_SERVICES = (
+# Service names searched in the OS keyring. Tried in order; first match wins.
+# - gh:github.com        → GitHub CLI (gh auth login)
+# - vscode.github-*      → VS Code built-in GitHub auth (older versions / macOS / Windows)
+# - GitHub.github.com    → VS Code GitHub auth (alternate name seen in some versions)
+_KEYRING_SERVICES = (
+    "gh:github.com",
     "vscode.github-authentication",
     "GitHub.github.com",
 )
 
 
-def _token_from_vscode_keyring() -> str | None:
-    """Try to read a GitHub token from VS Code's OS keyring entry.
-
-    VS Code stores GitHub auth sessions via SecretStorage (libsecret on Linux,
-    Keychain on macOS, Windows Credential Manager on Windows).  The ``keyring``
-    package is an optional dependency; if it is not installed, or if no matching
-    entry exists, this returns ``None`` silently.
-    """
+def _decode_keyring_secret(raw: str) -> str | None:
+    """Return a usable token from a plain or JSON-encoded keyring value."""
+    if not raw or not raw.isprintable():
+        return None
     try:
-        import keyring  # optional dependency
-
-        for service in _VSCODE_KEYRING_SERVICES:
-            token = keyring.get_password(service, "github.com")
-            if token:
-                # Stored value may be JSON {"account":…,"password":"ghp_…"}
-                try:
-                    import json as _json
-
-                    data = _json.loads(token)
-                    if isinstance(data, dict):
-                        token = data.get("password") or data.get("token") or token
-                except (ValueError, TypeError):
-                    pass
-                if token:
-                    return str(token)
-    except ImportError:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            raw = str(data.get("password") or data.get("token") or "")
+    except (ValueError, TypeError):
         pass
+    return raw.strip() or None
+
+
+def _token_from_keyring() -> str | None:
+    """Search the OS keyring for a usable GitHub token.
+
+    On Linux uses ``secretstorage`` (a ``keyring`` dependency) to search by
+    service attribute — so the GitHub username does not need to be known in
+    advance.  On macOS and Windows falls back to ``keyring.get_password`` with
+    the known account name ``"github.com"``.  Returns ``None`` silently if no
+    matching entry is found or if the backend is unavailable.
+    """
+    # Linux: secretstorage allows attribute-based search without knowing the account name.
+    # Resolve the D-Bus exception class first so it is always bound before the try block.
+    try:
+        from secretstorage.exceptions import SecretServiceNotAvailableException as _SSError
+    except ImportError:
+        _SSError = OSError  # placeholder; secretstorage not installed, won't be raised
+
+    try:
+        import secretstorage
+
+        bus = secretstorage.dbus_init()
+        collection = secretstorage.get_default_collection(bus)
+        for service in _KEYRING_SERVICES:
+            for item in collection.search_items({"service": service}):
+                raw = item.get_secret()
+                if raw:
+                    token = _decode_keyring_secret(raw.decode("utf-8", errors="ignore"))
+                    if token:
+                        return token
+    except (ImportError, _SSError):
+        pass
+
+    # macOS / Windows: keyring.get_password requires an account name.
+    import keyring
+
+    for service in _KEYRING_SERVICES:
+        raw = keyring.get_password(service, "github.com")
+        if raw:
+            token = _decode_keyring_secret(raw)
+            if token:
+                return token
     return None
 
 
@@ -348,9 +379,9 @@ def _resolve_github_token(explicit_key: str | None) -> str | None:
     Resolution order:
     1. ``explicit_key`` argument (passed directly to the constructor)
     2. ``GITHUB_TOKEN`` environment variable
-    3. ``gh auth token`` CLI output (works when ``gh`` is authenticated)
-    4. OS keyring entry written by the VS Code GitHub Copilot extension
-       (requires the optional ``keyring`` package)
+    3. ``gh auth token`` CLI (works when the GitHub CLI is authenticated)
+    4. OS keyring — searches entries written by the GitHub CLI and the VS Code
+       GitHub Copilot extension (via the bundled ``keyring`` package)
     """
     if explicit_key:
         return explicit_key
@@ -371,7 +402,7 @@ def _resolve_github_token(explicit_key: str | None) -> str | None:
                 return token
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         pass
-    return _token_from_vscode_keyring()
+    return _token_from_keyring()
 
 
 # Literal type for IDE autocomplete — keep in sync with Copilot.MODELS below.
@@ -477,7 +508,7 @@ class Copilot(_OpenAICompatible):
                 "  - api_key='ghp_...' constructor argument\n"
                 "  - GITHUB_TOKEN environment variable\n"
                 "  - gh auth login  (GitHub CLI)\n"
-                "  - VS Code GitHub Copilot extension + pip install keyring"
+                "  - VS Code GitHub Copilot extension (token read automatically from OS keyring)"
             )
         super().__init__(
             model=model,
