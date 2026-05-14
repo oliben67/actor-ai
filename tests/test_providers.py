@@ -651,12 +651,52 @@ class TestCopilotProvider:
 
     def test_uses_github_token_env(self, monkeypatch):
         monkeypatch.setenv("GITHUB_TOKEN", "ghp_test123")
-        captured = self._captured_init()
+        with patch("actor_ai.providers.openai.subprocess.run") as mock_sub:
+            captured = self._captured_init()
         assert captured.get("api_key") == "ghp_test123"
+        mock_sub.assert_not_called()
 
-    def test_explicit_api_key_takes_precedence(self):
-        captured = self._captured_init(api_key="ghp_explicit")
+    def test_explicit_api_key_takes_precedence(self, monkeypatch):
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        with patch("actor_ai.providers.openai.subprocess.run") as mock_sub:
+            captured = self._captured_init(api_key="ghp_explicit")
         assert captured.get("api_key") == "ghp_explicit"
+        mock_sub.assert_not_called()
+
+    def test_falls_back_to_gh_cli(self, monkeypatch):
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "ghp_from_cli\n"
+        captured: dict = {}
+        with patch("actor_ai.providers.openai.subprocess.run", return_value=mock_result):
+            with patch("actor_ai.providers.openai.OpenAI") as mock_oai:
+                mock_oai.side_effect = lambda **kw: captured.update(kw) or MagicMock()
+                Copilot()
+        assert captured.get("api_key") == "ghp_from_cli"
+
+    def test_gh_cli_not_found_yields_none(self, monkeypatch):
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        captured: dict = {}
+        with patch(
+            "actor_ai.providers.openai.subprocess.run", side_effect=FileNotFoundError
+        ):
+            with patch("actor_ai.providers.openai.OpenAI") as mock_oai:
+                mock_oai.side_effect = lambda **kw: captured.update(kw) or MagicMock()
+                Copilot()
+        assert captured.get("api_key") is None
+
+    def test_gh_cli_nonzero_exit_yields_none(self, monkeypatch):
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stdout = ""
+        captured: dict = {}
+        with patch("actor_ai.providers.openai.subprocess.run", return_value=mock_result):
+            with patch("actor_ai.providers.openai.OpenAI") as mock_oai:
+                mock_oai.side_effect = lambda **kw: captured.update(kw) or MagicMock()
+                Copilot()
+        assert captured.get("api_key") is None
 
     def test_timeout_passed_to_client_constructor(self):
         captured = self._captured_init(timeout=30.0)

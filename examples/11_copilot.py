@@ -98,28 +98,56 @@ def _section_construction() -> None:
 
 
 def _section_token(monkeypatch_env: dict) -> None:
-    _divider("2. Token resolution — GITHUB_TOKEN env var")
+    _divider("2. Token resolution — priority chain")
 
     # Standard library imports:
     import os
+    from unittest.mock import call
 
-    os.environ["GITHUB_TOKEN"] = "ghp_demo_token_from_env"
+    _gh_result = MagicMock()
+    _gh_result.returncode = 0
+    _gh_result.stdout = "ghp_from_gh_cli\n"
 
+    # Priority 1: explicit api_key
     captured: dict = {}
-    with patch("actor_ai.providers.openai.OpenAI") as mock_oai:
-        mock_oai.side_effect = lambda **kw: captured.update(kw) or MagicMock()
-        Copilot()
+    with patch("actor_ai.providers.openai.subprocess.run") as mock_sub:
+        with patch("actor_ai.providers.openai.OpenAI") as mock_oai:
+            mock_oai.side_effect = lambda **kw: captured.update(kw) or MagicMock()
+            Copilot(api_key="ghp_explicit_override")
+    print(f"  1. explicit api_key : {captured.get('api_key')}")
+    print(f"     gh CLI called     : {mock_sub.called}  (skipped — key provided)")
 
-    print(f"  api_key resolved    : {captured.get('api_key')}")
-
+    # Priority 2: GITHUB_TOKEN env var
+    os.environ["GITHUB_TOKEN"] = "ghp_from_env"
     captured2: dict = {}
-    with patch("actor_ai.providers.openai.OpenAI") as mock_oai:
-        mock_oai.side_effect = lambda **kw: captured2.update(kw) or MagicMock()
-        Copilot(api_key="ghp_explicit_override")
-
-    print(f"  explicit api_key    : {captured2.get('api_key')}")
-
+    with patch("actor_ai.providers.openai.subprocess.run") as mock_sub2:
+        with patch("actor_ai.providers.openai.OpenAI") as mock_oai:
+            mock_oai.side_effect = lambda **kw: captured2.update(kw) or MagicMock()
+            Copilot()
+    print(f"\n  2. GITHUB_TOKEN env : {captured2.get('api_key')}")
+    print(f"     gh CLI called     : {mock_sub2.called}  (skipped — env var found)")
     del os.environ["GITHUB_TOKEN"]
+
+    # Priority 3: gh auth token CLI
+    captured3: dict = {}
+    with patch("actor_ai.providers.openai.subprocess.run", return_value=_gh_result):
+        with patch("actor_ai.providers.openai.OpenAI") as mock_oai:
+            mock_oai.side_effect = lambda **kw: captured3.update(kw) or MagicMock()
+            Copilot()
+    print(f"\n  3. gh auth token    : {captured3.get('api_key')} (from gh CLI)")
+
+    # Fallback: nothing available
+    _fail = MagicMock()
+    _fail.returncode = 1
+    _fail.stdout = ""
+    captured4: dict = {}
+    with patch("actor_ai.providers.openai.subprocess.run", return_value=_fail):
+        with patch("actor_ai.providers.openai.OpenAI") as mock_oai:
+            mock_oai.side_effect = lambda **kw: captured4.update(kw) or MagicMock()
+            Copilot()
+    print(f"\n  4. no token found   : api_key={captured4.get('api_key')!r} (OpenAI handles auth)")
+
+    _ = call  # suppress unused import warning
 
 
 # ── 3. Simple instruction with AIActor ────────────────────────────────────────

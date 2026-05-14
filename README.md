@@ -56,6 +56,8 @@ print(Copilot.MODELS)
 
 Valid models: `gpt-4o`, `gpt-4o-mini`, `o1`, `o1-mini`, `o3-mini`, `claude-sonnet-4-5`, `gemini-2.0-flash`. Passing any other string raises `ValueError` immediately at construction time.
 
+The token is resolved in order: `api_key` argument → `GITHUB_TOKEN` env var → `gh auth token` CLI (no env var needed when the GitHub CLI is authenticated).
+
 ## Key features
 
 - **Multi-turn sessions** — rolling conversation history, configurable window (`max_history`)

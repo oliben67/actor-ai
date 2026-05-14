@@ -349,7 +349,13 @@ Reads `DEEPSEEK_API_KEY`.
 
 ### Copilot (GitHub)
 
-Routes requests through GitHub Copilot's OpenAI-compatible endpoint (`https://api.githubcopilot.com`). Requires a GitHub account with an active Copilot subscription (Individual, Business, or Enterprise). Reads `GITHUB_TOKEN` from the environment.
+Routes requests through GitHub Copilot's OpenAI-compatible endpoint (`https://api.githubcopilot.com`). Requires a GitHub account with an active Copilot subscription (Individual, Business, or Enterprise).
+
+Token resolution order (first match wins):
+
+1. `api_key` constructor argument
+2. `GITHUB_TOKEN` environment variable
+3. `gh auth token` CLI — works automatically when the [GitHub CLI](https://cli.github.com/) is authenticated (`gh auth login`), no env var required
 
 ```python
 from actor_ai import AIActor, Copilot
@@ -394,7 +400,7 @@ except ValueError as exc:
 | Parameter | Type | Description |
 |---|---|---|
 | `model` | `CopilotModel` | Default: `"gpt-4o"` |
-| `api_key` | `str \| None` | GitHub token; overrides `GITHUB_TOKEN` |
+| `api_key` | `str \| None` | GitHub token; overrides env var and `gh` CLI |
 | `temperature` | `float \| None` | Sampling temperature |
 | `top_p` | `float \| None` | Nucleus-sampling probability mass |
 | `timeout` | `float \| None` | HTTP timeout in seconds |

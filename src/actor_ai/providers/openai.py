@@ -4,6 +4,7 @@ from __future__ import annotations
 # Standard library imports:
 import json
 import os
+import subprocess
 from collections.abc import Callable
 from typing import Literal
 
@@ -305,6 +306,36 @@ class DeepSeek(_OpenAICompatible):
         )
 
 
+def _resolve_github_token(explicit_key: str | None) -> str | None:
+    """Return a GitHub token using the first available source.
+
+    Resolution order:
+    1. ``explicit_key`` argument (passed directly to the constructor)
+    2. ``GITHUB_TOKEN`` environment variable
+    3. ``gh auth token`` CLI output (works when ``gh`` is authenticated)
+    """
+    if explicit_key:
+        return explicit_key
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        return token
+    try:
+        result = subprocess.run(
+            ["gh", "auth", "token"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if result.returncode == 0:
+            token = result.stdout.strip()
+            if token:
+                return token
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+    return None
+
+
 # Literal type for IDE autocomplete — keep in sync with Copilot.MODELS below.
 CopilotModel = Literal[
     "gpt-4o",
@@ -345,7 +376,9 @@ class Copilot(_OpenAICompatible):
     model : CopilotModel
         One of the supported Copilot model strings (see ``Copilot.MODELS``).
     api_key : str, optional
-        GitHub token; falls back to ``GITHUB_TOKEN`` env variable.
+        GitHub token.  Resolution order: explicit argument →
+        ``GITHUB_TOKEN`` environment variable → ``gh auth token`` CLI
+        (works when the GitHub CLI is authenticated).
     temperature : float, optional
         Sampling temperature.
     top_p : float, optional
@@ -383,7 +416,7 @@ class Copilot(_OpenAICompatible):
     )
 
     _BASE_URL = "https://api.githubcopilot.com"
-    _INTEGRATION_HEADER = {"Copilot-Integration-Id": "vscode-chat"}
+    _INTEGRATION_HEADER = {"Copilot-Integration-Id": "vscode-chat"}  # noqa: RUF012
 
     def __init__(
         self,
@@ -401,7 +434,7 @@ class Copilot(_OpenAICompatible):
             raise ValueError(f"Unsupported Copilot model {model!r}. Valid models: {valid}")
         super().__init__(
             model=model,
-            api_key=api_key,
+            api_key=_resolve_github_token(api_key),
             api_key_env="GITHUB_TOKEN",
             base_url=self._BASE_URL,
             temperature=temperature,
