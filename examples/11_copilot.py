@@ -245,9 +245,7 @@ def _section_chorus() -> None:
     reviewer_ref = CopilotReviewer.start()
     doc_writer_ref = CopilotDocWriter.start()
 
-    chorus_ref = Chorus.start(
-        agents={"reviewer": reviewer_ref, "doc_writer": doc_writer_ref}
-    )
+    chorus_ref = Chorus.start(agents={"reviewer": reviewer_ref, "doc_writer": doc_writer_ref})
     chorus = chorus_ref.proxy()
 
     try:

@@ -398,10 +398,7 @@ class Copilot(_OpenAICompatible):
     ) -> None:
         if model not in self.MODELS:
             valid = ", ".join(sorted(self.MODELS))
-            raise ValueError(
-                f"Unsupported Copilot model {model!r}. "
-                f"Valid models: {valid}"
-            )
+            raise ValueError(f"Unsupported Copilot model {model!r}. Valid models: {valid}")
         super().__init__(
             model=model,
             api_key=api_key,

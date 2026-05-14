@@ -715,7 +715,7 @@ class TestCopilotProvider:
         p._client = MagicMock()
         p._client.chat.completions.create.side_effect = [tool_resp, final_resp]
 
-        result = p.run("s", [], [], lambda n, a: (a["n"] * 2), 100)
+        result = p.run("s", [], [], lambda n, a: a["n"] * 2, 100)
         assert result == "result is 10"
         assert p._client.chat.completions.create.call_count == 2
 
