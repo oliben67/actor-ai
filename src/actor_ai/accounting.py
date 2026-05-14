@@ -8,6 +8,7 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Self
 
 # ---------------------------------------------------------------------------
 # Monitoring context
@@ -45,8 +46,8 @@ class UsageSummary:
             self.output_tokens + other.output_tokens,
         )
 
-    def __iadd__(self, other: UsageSummary) -> UsageSummary:
-        return self.__add__(other)
+    def __iadd__(self, other: UsageSummary) -> Self:
+        return self.__add__(other) # type: ignore
 
 
 # ---------------------------------------------------------------------------
