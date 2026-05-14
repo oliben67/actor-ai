@@ -4,6 +4,16 @@ from __future__ import annotations
 from .anthropic import Claude
 from .base import LLMProvider
 from .litellm import LiteLLM
-from .openai import GPT, DeepSeek, Gemini, Mistral
+from .openai import GPT, Copilot, CopilotModel, DeepSeek, Gemini, Mistral
 
-__all__ = ["LLMProvider", "Claude", "GPT", "Gemini", "LiteLLM", "Mistral", "DeepSeek"]
+__all__ = [
+    "Claude",
+    "Copilot",
+    "CopilotModel",
+    "DeepSeek",
+    "GPT",
+    "Gemini",
+    "LiteLLM",
+    "LLMProvider",
+    "Mistral",
+]

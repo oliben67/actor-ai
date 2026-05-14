@@ -74,7 +74,7 @@ uv run python examples/01_hello_world.py
 
 ## User Manual
 
-See [MANUAL.md](MANUAL.md) for the complete reference.
+See [MANUAL.md](https://github.com/oliben67/actor-ai/blob/master/MANUAL.md) for the complete reference.
 
 ## License
 

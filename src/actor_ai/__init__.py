@@ -5,13 +5,25 @@ from .accounting import Ledger, LedgerEntry, ModelRate, MonitoringContext, Rates
 from .actor import AIActor
 from .chorus import Chorus
 from .messages import Forget, Instruct, Remember
-from .providers import GPT, Claude, DeepSeek, Gemini, LiteLLM, LLMProvider, Mistral
+from .providers import (
+    GPT,
+    Claude,
+    Copilot,
+    CopilotModel,
+    DeepSeek,
+    Gemini,
+    LiteLLM,
+    LLMProvider,
+    Mistral,
+)
 from .tools import tool
 
 __all__ = [
     "AIActor",
     "Chorus",
     "Claude",
+    "Copilot",
+    "CopilotModel",
     "DeepSeek",
     "Forget",
     "GPT",
@@ -33,4 +45,4 @@ __all__ = [
 
 def main() -> None:
     print("actor-ai: multi-provider AI agents built on pykka.")
-    print("Providers: Claude, GPT, Gemini, Mistral, DeepSeek")
+    print("Providers: Claude, Copilot, GPT, Gemini, Mistral, DeepSeek")

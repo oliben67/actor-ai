@@ -1,6 +1,6 @@
 [project]
 name = "actor-ai"
-version = "0.1.0"
+version = "0.1.1"
 description = "Multi-provider AI agents built on pykka."
 readme = "README.md"
 authors = [
@@ -13,6 +13,12 @@ dependencies = [
     "openai>=1.0",
     "litellm>=1.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/oliben67/actor-ai"
+Repository = "https://github.com/oliben67/actor-ai"
+Documentation = "https://github.com/oliben67/actor-ai/blob/master/MANUAL.md"
+"Bug Tracker" = "https://github.com/oliben67/actor-ai/issues"
 
 [project.scripts]
 actor-ai = "actor_ai:main"

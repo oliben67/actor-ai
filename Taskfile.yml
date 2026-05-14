@@ -5,6 +5,8 @@ vars:
   SRC:      src/actor_ai
   TESTS:    tests
   EXAMPLES: examples
+  HOME:
+    sh: echo $HOME
 
 # ── Default ────────────────────────────────────────────────────────────────
 tasks:
@@ -141,18 +143,18 @@ tasks:
         silent: false
 
   publish:
-    desc: Build and publish to PyPI (prompts for confirmation)
+    desc: Clean dist, run all checks, build, and publish to PyPI
     prompt: "Publish to PyPI — this cannot be undone, continue?"
     cmds:
       - task: check
       - task: build
-      - uv publish
+      - uv publish --publish-url https://upload.pypi.org/legacy/ --token $(python3 -c "import configparser; c=configparser.ConfigParser(); c.read('{{.HOME}}/.pypirc'); print(c['pypi']['password'])")
 
   publish:test:
-    desc: Build and publish to TestPyPI for a dry run
+    desc: Clean dist, build, and publish to TestPyPI
     cmds:
       - task: build
-      - uv publish --publish-url https://test.pypi.org/legacy/
+      - uv publish --publish-url https://test.pypi.org/legacy/ --token $(python3 -c "import configparser; c=configparser.ConfigParser(); c.read('{{.HOME}}/.pypirc'); print(c['testpypi']['password'])")
 
   # ── Dependencies ─────────────────────────────────────────────────────────
   deps:update:

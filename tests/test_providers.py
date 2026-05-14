@@ -16,6 +16,7 @@ from actor_ai.providers.anthropic import Claude
 from actor_ai.providers.base import LLMProvider
 from actor_ai.providers.openai import (
     GPT,
+    Copilot,
     DeepSeek,
     Gemini,
     Mistral,
@@ -383,6 +384,7 @@ class TestProviderDefaults:
             (Gemini, "gemini-2.0-flash"),
             (Mistral, "mistral-large-latest"),
             (DeepSeek, "deepseek-chat"),
+            (Copilot, "gpt-4o"),
         ],
     )
     def test_default_model(self, cls, expected_model):
@@ -573,3 +575,174 @@ class TestGPTConfiguration:
             mock_oai.side_effect = lambda **kw: captured.update(kw) or MagicMock()
             GPT(timeout=20.0)
         assert captured.get("timeout") == 20.0
+
+
+# ---------------------------------------------------------------------------
+# Copilot provider
+# ---------------------------------------------------------------------------
+
+
+class TestCopilotProvider:
+    def _make(self, **kwargs) -> Copilot:
+        with patch("actor_ai.providers.openai.OpenAI"):
+            p = Copilot(**kwargs)
+        p._client = MagicMock()
+        p._client.chat.completions.create.return_value = openai_response(
+            openai_choice("stop", content="ok")
+        )
+        return p
+
+    def _captured_init(self, **kwargs) -> dict:
+        captured: dict = {}
+        with patch("actor_ai.providers.openai.OpenAI") as mock_oai:
+            mock_oai.side_effect = lambda **kw: captured.update(kw) or MagicMock()
+            Copilot(**kwargs)
+        return captured
+
+    # -- model validation --
+
+    def test_invalid_model_raises_value_error(self):
+        with pytest.raises(ValueError, match="Unsupported Copilot model"):
+            with patch("actor_ai.providers.openai.OpenAI"):
+                Copilot("gpt-3.5-turbo")
+
+    def test_error_message_lists_valid_models(self):
+        with pytest.raises(ValueError) as exc:
+            with patch("actor_ai.providers.openai.OpenAI"):
+                Copilot("bad-model")
+        msg = str(exc.value)
+        for m in Copilot.MODELS:
+            assert m in msg
+
+    def test_all_valid_models_accepted(self):
+        for model in Copilot.MODELS:
+            with patch("actor_ai.providers.openai.OpenAI"):
+                p = Copilot(model)
+            assert p.model == model
+
+    def test_models_class_attribute_is_frozenset(self):
+        assert isinstance(Copilot.MODELS, frozenset)
+        assert len(Copilot.MODELS) > 0
+
+    def test_copilot_model_literal_importable(self):
+        # Local imports:
+        from actor_ai import CopilotModel as CM
+
+        assert CM is not None
+
+    # -- constructor / identity --
+
+    def test_default_model(self):
+        p = self._make()
+        assert p.model == "gpt-4o"
+
+    def test_custom_model(self):
+        p = self._make(model="claude-sonnet-4-5")
+        assert p.model == "claude-sonnet-4-5"
+
+    def test_base_url_is_githubcopilot(self):
+        captured = self._captured_init()
+        assert captured.get("base_url") == "https://api.githubcopilot.com"
+
+    def test_integration_header_sent(self):
+        captured = self._captured_init()
+        headers = captured.get("default_headers", {})
+        assert headers.get("Copilot-Integration-Id") == "vscode-chat"
+
+    def test_uses_github_token_env(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_TOKEN", "ghp_test123")
+        captured = self._captured_init()
+        assert captured.get("api_key") == "ghp_test123"
+
+    def test_explicit_api_key_takes_precedence(self):
+        captured = self._captured_init(api_key="ghp_explicit")
+        assert captured.get("api_key") == "ghp_explicit"
+
+    def test_timeout_passed_to_client_constructor(self):
+        captured = self._captured_init(timeout=30.0)
+        assert captured.get("timeout") == 30.0
+
+    # -- run() forwards parameters correctly --
+
+    def test_run_returns_reply(self):
+        p = self._make()
+        assert p.run("sys", [], [], lambda n, a: None, 100) == "ok"
+
+    def test_temperature_forwarded(self):
+        p = self._make(temperature=0.3)
+        p.run("s", [], [], lambda n, a: None, 100)
+        assert p._client.chat.completions.create.call_args[1]["temperature"] == 0.3
+
+    def test_top_p_forwarded(self):
+        p = self._make(top_p=0.9)
+        p.run("s", [], [], lambda n, a: None, 100)
+        assert p._client.chat.completions.create.call_args[1]["top_p"] == 0.9
+
+    def test_seed_forwarded(self):
+        p = self._make(seed=7)
+        p.run("s", [], [], lambda n, a: None, 100)
+        assert p._client.chat.completions.create.call_args[1]["seed"] == 7
+
+    def test_stop_forwarded(self):
+        p = self._make(stop=["END"])
+        p.run("s", [], [], lambda n, a: None, 100)
+        assert p._client.chat.completions.create.call_args[1]["stop"] == ["END"]
+
+    def test_none_params_not_forwarded(self):
+        p = self._make()
+        p.run("s", [], [], lambda n, a: None, 100)
+        kw = p._client.chat.completions.create.call_args[1]
+        for param in ("temperature", "top_p", "seed", "stop"):
+            assert param not in kw
+
+    def test_system_message_prepended(self):
+        p = self._make()
+        p.run("be helpful", [{"role": "user", "content": "hi"}], [], lambda n, a: None, 100)
+        messages = p._client.chat.completions.create.call_args[1]["messages"]
+        assert messages[0] == {"role": "system", "content": "be helpful"}
+        assert messages[1] == {"role": "user", "content": "hi"}
+
+    def test_tool_call_round_trip(self):
+        tool_call = SimpleNamespace(
+            id="tc1",
+            function=SimpleNamespace(name="double", arguments='{"n": 5}'),
+        )
+        tool_resp = openai_response(openai_choice("tool_calls", tool_calls=[tool_call]))
+        final_resp = openai_response(openai_choice("stop", content="result is 10"))
+
+        with patch("actor_ai.providers.openai.OpenAI"):
+            p = Copilot()
+        p._client = MagicMock()
+        p._client.chat.completions.create.side_effect = [tool_resp, final_resp]
+
+        result = p.run("s", [], [], lambda n, a: (a["n"] * 2), 100)
+        assert result == "result is 10"
+        assert p._client.chat.completions.create.call_count == 2
+
+    def test_usage_callback_called(self):
+        p = self._make()
+        resp = openai_response(openai_choice("stop", content="ok"))
+        resp.usage = SimpleNamespace(prompt_tokens=10, completion_tokens=5)
+        p._client.chat.completions.create.return_value = resp
+        received = []
+        p.run("s", [], [], lambda n, a: None, 100, on_usage=received.append)
+        assert len(received) == 1
+        assert received[0].input_tokens == 10
+        assert received[0].output_tokens == 5
+
+    def test_monitoring_context_ignored(self):
+        # Local imports:
+        from actor_ai.accounting import MonitoringContext
+
+        p = self._make()
+        ctx = MonitoringContext(actor_name="test", session_id="s1")
+        result = p.run("s", [], [], lambda n, a: None, 100, monitoring_context=ctx)
+        assert result == "ok"
+
+    # -- exported from top-level package --
+
+    def test_copilot_importable_from_actor_ai(self):
+        # Local imports:
+        from actor_ai import Copilot as CopilotPublic
+
+        assert CopilotPublic is Copilot
