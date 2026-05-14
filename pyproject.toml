@@ -41,7 +41,7 @@ build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--cov=actor_ai --cov-report=term-missing --cov-fail-under=95"
+addopts = "--cov=actor_ai --cov-report=term-missing --cov-fail-under=99"
 
 [tool.coverage.run]
 branch = true

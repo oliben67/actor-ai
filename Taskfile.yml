@@ -26,7 +26,7 @@ tasks:
 
   # ── Testing ──────────────────────────────────────────────────────────────
   test:
-    desc: Run the full test suite with branch coverage (≥ 95 % required)
+    desc: Run the full test suite with branch coverage (≥ 99 % required)
     cmd: uv run pytest
 
   test:fast:
