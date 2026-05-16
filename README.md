@@ -2,7 +2,7 @@
 
 **Multi-provider AI agents built on [pykka](https://github.com/jodal/pykka).**
 
-`actor-ai` extends pykka's actor framework so each agent can process natural-language instructions, call tools, maintain conversation sessions, remember facts, track token spend, monitor traffic, coordinate with other agents via Chorus, and execute multi-step state-machine workflows — all with a clean, provider-agnostic API.
+`actor-ai` extends [pykka](https://github.com/jodal/pykka) — a Python actor-model framework created by [Stein Magnus Jodal](https://github.com/jodal) — so each agent runs in its own thread, processes messages safely from a FIFO queue, and exposes a clean proxy API. On top of that foundation, `actor-ai` adds natural-language instructions, tool calling, conversation sessions, long-term memory, token accounting, traffic monitoring, multi-agent Chorus coordination, and state-machine Workflow orchestration — all with a provider-agnostic API.
 
 ## Installation
 
@@ -15,23 +15,55 @@ Requires Python ≥ 3.14 and one (or more) provider API keys.
 ## Quick start
 
 ```python
+from actor_ai import make_agent, Claude
+
+Assistant = make_agent(
+    "Assistant",
+    "You are a helpful assistant.",
+    Claude(),          # requires ANTHROPIC_API_KEY
+)
+
+with Assistant.get_proxy() as proxy:
+    reply = proxy.instruct("What is the capital of France?").get()
+print(reply)   # → "The capital of France is Paris."
+```
+
+`make_agent()` returns a ready-to-use `AIActor` subclass without any boilerplate. Agents can delegate to other agents via `sub_agents`, which are auto-wired as `@tool` methods the LLM can call:
+
+```python
+from actor_ai import make_agent, Claude
+
+Researcher = make_agent("Researcher", "You research topics thoroughly.", Claude())
+Writer     = make_agent("Writer",     "You write clear summaries.",      Claude())
+
+Orchestrator = make_agent(
+    "Orchestrator",
+    "Coordinate research and writing. Use your tools.",
+    Claude(),
+    sub_agents={"researcher": Researcher, "writer": Writer},
+)
+
+with Orchestrator.get_proxy() as proxy:
+    report = proxy.instruct("Write a report on the actor model.").get()
+```
+
+For agents that need lifecycle hooks or stateful tools, the class-based approach is still available:
+
+```python
 from actor_ai import AIActor, Claude
 
 class Assistant(AIActor):
     system_prompt = "You are a helpful assistant."
-    provider = Claude()          # requires ANTHROPIC_API_KEY
+    provider = Claude()
 
-ref = Assistant.start()
-reply = ref.proxy().instruct("What is the capital of France?").get()
-print(reply)   # → "The capital of France is Paris."
-ref.stop()
+with Assistant.get_proxy() as proxy:
+    reply = proxy.instruct("What is the capital of France?").get()
 ```
 
 `AIActor` can also run without a provider — it behaves as a plain pykka actor (memory, session, and message-passing still work; `instruct()` raises `RuntimeError` if called without a provider):
 
 ```python
-class DataActor(AIActor):
-    pass  # no provider — pure actor, no LLM needed
+DataNode = make_agent("DataNode", "Pure coordination actor.")  # no provider
 ```
 
 ## Providers
@@ -135,6 +167,7 @@ wf.proxy().add_transition(WorkflowTransition("review", "approve", on_event="appr
 
 ## Key features
 
+- **Agent factory** — `make_agent()` creates agents in one call; `sub_agents` auto-wires delegation tools
 - **Multi-turn sessions** — rolling conversation history, configurable window (`max_history`)
 - **Long-term memory** — `remember(key, value)` / `forget(key)` facts injected into every system prompt
 - **Tool calling** — decorate methods with `@tool` to expose them to the LLM
@@ -163,6 +196,7 @@ examples/
   12_chorus_advanced.py     — ChorusType, join/leave, nested choruses, non-AI actors
   13_workflow.py            — Workflow state machine: run, step, event, runtime modification
   14_workflow_parallel.py   — Parallel actor states and run_detached()
+  15_make_agent.py          — make_agent() factory: simple agents, tools, sub-agents
 ```
 
 Run any example:
