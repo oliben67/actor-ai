@@ -12,6 +12,7 @@ from typing import IO, Any, TypeVar, overload
 import pykka
 
 from .accounting import Ledger, MonitoringContext, UsageSummary, new_session_id
+from .context import SharedContext
 from .messages import Forget, Instruct, Remember
 from .providers import LLMProvider
 from .tools import extract_tools, tool
@@ -97,6 +98,7 @@ class AIActor(pykka.ThreadingActor):
     ledger: Ledger | None = None
     actor_name: str | None = None
     monitoring: bool = False
+    context: SharedContext | None = None
 
     # ------------------------------------------------------------------ #
     # Lifecycle                                                            #
@@ -200,6 +202,11 @@ class AIActor(pykka.ThreadingActor):
             self._session.append({"role": "assistant", "content": reply})
             self._trim_session()
 
+        if self.context is not None:
+            label = self.actor_name or type(self).__name__
+            self.context.append_log(label, "user", text)
+            self.context.append_log(label, "assistant", reply)
+
         return reply
 
     @overload
@@ -254,20 +261,30 @@ class AIActor(pykka.ThreadingActor):
 
     def remember(self, key: str, value: str) -> None:
         """Persist a named fact that will be included in every system prompt."""
-        self._memory[key] = value
+        if self.context is not None:
+            self.context.remember(key, value)
+        else:
+            self._memory[key] = value
 
     def forget(self, key: str) -> None:
         """Remove a previously remembered fact."""
-        self._memory.pop(key, None)
+        if self.context is not None:
+            self.context.forget(key)
+        else:
+            self._memory.pop(key, None)
 
     def clear_session(self) -> None:
         """Discard the current conversation session and start a new session ID.
 
-        Also clears working memory (task-scoped facts that do not survive a session reset).
-        Long-term memory (``remember()``/``forget()``) is unaffected.
+        When no shared context is attached, also clears working memory (task-scoped
+        facts that do not survive a session reset).  When a :class:`SharedContext`
+        is attached, working memory is NOT cleared — shared state belongs to the
+        context and must be reset explicitly via ``clear_working_memory()``.
+        Long-term memory (``remember()``/``forget()``) is always unaffected.
         """
         self._session.clear()
-        self._working_memory.clear()
+        if self.context is None:
+            self._working_memory.clear()
         self._session_id = new_session_id()
 
     def get_session(self) -> list[dict]:
@@ -276,6 +293,8 @@ class AIActor(pykka.ThreadingActor):
 
     def get_memory(self) -> dict[str, str]:
         """Return a copy of the current memory store."""
+        if self.context is not None:
+            return self.context.get_memory()
         return dict(self._memory)
 
     def get_session_id(self) -> str:
@@ -287,23 +306,35 @@ class AIActor(pykka.ThreadingActor):
     def remember_working(self, key: str, value: str) -> None:
         """Store a task-scoped fact injected into the system prompt for this session.
 
-        Working memory is cleared by ``clear_session()``.  Use it for ephemeral
-        context (current task goal, intermediate results) that should not persist
-        across sessions.  For durable facts use ``remember()`` instead.
+        Without a shared context: cleared by ``clear_session()``.
+        With a shared context: delegates to the context and is visible to all
+        agents sharing it; use ``clear_working_memory()`` to reset.
+        For durable facts use ``remember()`` instead.
         """
-        self._working_memory[key] = value
+        if self.context is not None:
+            self.context.remember_working(key, value)
+        else:
+            self._working_memory[key] = value
 
     def forget_working(self, key: str) -> None:
         """Remove a working-memory fact (no-op if the key does not exist)."""
-        self._working_memory.pop(key, None)
+        if self.context is not None:
+            self.context.forget_working(key)
+        else:
+            self._working_memory.pop(key, None)
 
     def get_working_memory(self) -> dict[str, str]:
         """Return a copy of the current working-memory store."""
+        if self.context is not None:
+            return self.context.get_working_memory()
         return dict(self._working_memory)
 
     def clear_working_memory(self) -> None:
         """Remove all working-memory facts without resetting the session."""
-        self._working_memory.clear()
+        if self.context is not None:
+            self.context.clear_working_memory()
+        else:
+            self._working_memory.clear()
 
     # Usage tracking ---------------------------------------------------- #
 
@@ -324,12 +355,14 @@ class AIActor(pykka.ThreadingActor):
 
     def _effective_system_prompt(self) -> str:
         result = self.system_prompt
-        if self._memory:
-            facts = "\n".join(f"- {k}: {v}" for k, v in self._memory.items())
+        memory = self.context.get_memory() if self.context else self._memory
+        working = self.context.get_working_memory() if self.context else self._working_memory
+        if memory:
+            facts = "\n".join(f"- {k}: {v}" for k, v in memory.items())
             result = f"{result}\n\nKnown facts:\n{facts}"
-        if self._working_memory:
-            working = "\n".join(f"- {k}: {v}" for k, v in self._working_memory.items())
-            result = f"{result}\n\nWorking memory:\n{working}"
+        if working:
+            wm = "\n".join(f"- {k}: {v}" for k, v in working.items())
+            result = f"{result}\n\nWorking memory:\n{wm}"
         return result
 
     def _trim_session(self) -> None:
@@ -410,6 +443,7 @@ def make_agent(
     ledger: Ledger | None = None,
     actor_name: str | None = None,
     monitoring: bool = False,
+    context: SharedContext | None = None,
 ) -> type[AIActor]:
     """Create a configured AIActor subclass without writing a class definition.
 
@@ -465,6 +499,7 @@ def make_agent(
         "ledger": ledger,
         "actor_name": actor_name or name,
         "monitoring": monitoring,
+        "context": context,
     }
 
     if tools:

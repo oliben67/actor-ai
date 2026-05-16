@@ -4,6 +4,7 @@ from __future__ import annotations
 from .accounting import Ledger, LedgerEntry, ModelRate, MonitoringContext, Rates, UsageSummary
 from .actor import AIActor, InstructionInput, make_agent
 from .chorus import Chorus, ChorusType
+from .context import SharedContext
 from .messages import Forget, Instruct, Remember
 from .providers import (
     GPT,
@@ -41,6 +42,7 @@ __all__ = [
     "MonitoringContext",
     "Rates",
     "Remember",
+    "SharedContext",
     "UsageSummary",
     "Workflow",
     "WorkflowState",
