@@ -286,7 +286,17 @@ session_id: str        = proxy.get_session_id().get()
 
 ## 4. Memory
 
-Memory stores named facts that persist across sessions. Facts are automatically appended to the system prompt so the LLM sees them on every call.
+`AIActor` has three memory tiers, each with a different scope and lifetime:
+
+| Tier | Methods | Scope | Injected as |
+|---|---|---|---|
+| Short-term | session history | Current conversation | Message history |
+| Working | `remember_working` / `forget_working` | Current task / session | `Working memory:` in system prompt |
+| Long-term | `remember` / `forget` | Durable across sessions | `Known facts:` in system prompt |
+
+### 4.1 Long-term memory
+
+Long-term memory stores facts that persist across sessions. Use it for durable user context: name, preferences, role.
 
 ```python
 proxy.remember("name",    "Alice").get()
@@ -304,14 +314,49 @@ proxy.forget("company").get()
 memory: dict[str, str] = proxy.get_memory().get()
 ```
 
-**Memory vs session:**
+Long-term memory **survives `clear_session()`**.
 
-| | Session | Memory |
-|---|---|---|
-| Scope | Single conversation thread | Persistent across sessions |
-| Content | Full message history | Named key-value facts |
-| Cleared by | `clear_session()` | `forget(key)` |
-| Sent to LLM | As message history | Injected into system prompt |
+### 4.2 Working memory
+
+Working memory stores task-scoped facts. Use it for ephemeral context that applies to a specific task: current goal, intermediate results, document being processed.
+
+```python
+proxy.remember_working("task",    "write Q3 summary").get()
+proxy.remember_working("context", "cloud revenue up 12%").get()
+
+# System prompt also contains:
+# "Working memory:
+# - task: write Q3 summary
+# - context: cloud revenue up 12%"
+
+proxy.forget_working("context").get()
+proxy.get_working_memory()        # -> dict[str, str]
+proxy.clear_working_memory()      # remove all working facts without resetting session
+```
+
+Working memory is **cleared by `clear_session()`**.
+
+### 4.3 Session history (short-term)
+
+Session history is the rolling message log automatically maintained by `instruct()`. It is covered in [Section 3](#3-session-management).
+
+### 4.4 Summary
+
+```python
+# Long-term memory
+proxy.remember("name", "Alice").get()       # store
+proxy.forget("name").get()                  # remove one key
+proxy.get_memory().get()                    # inspect -> dict
+
+# Working memory
+proxy.remember_working("task", "draft Q3").get()  # store
+proxy.forget_working("task").get()                # remove one key
+proxy.get_working_memory().get()                  # inspect -> dict
+proxy.clear_working_memory().get()                # clear all
+
+# clear_session() resets conversation AND working memory; long-term persists
+proxy.clear_session().get()
+```
 
 ---
 
@@ -848,6 +893,27 @@ WorkflowTransition(
 
 The accounting layer records every `instruct()` call and calculates token spend.
 
+### Per-actor usage tracking
+
+Every `AIActor` instance tracks token usage internally, independent of any `Ledger`. Use this for lightweight, per-actor counters without the overhead of a shared ledger.
+
+```python
+with MyAgent.get_proxy() as proxy:
+    proxy.instruct("First call.").get()
+    proxy.instruct("Second call.").get()
+
+    usage = proxy.get_usage().get()
+    print(usage.input_tokens)   # total input tokens across all calls
+    print(usage.output_tokens)  # total output tokens across all calls
+    print(usage.total_tokens)   # input + output
+
+    proxy.reset_usage().get()   # reset counters to zero
+    usage = proxy.get_usage().get()
+    print(usage.total_tokens)   # 0
+```
+
+`get_usage()` returns a `UsageSummary` snapshot; it is not affected by subsequent calls until the next `get_usage()` call. `reset_usage()` resets only the counter — it does not affect the session or memory.
+
 ### Ledger
 
 ```python
@@ -1050,15 +1116,25 @@ make_agent(
 # Instructions
 instruct(instruction, history=None, use_session=True) -> str
 
-# Memory
+# Long-term memory
 remember(key: str, value: str) -> None
 forget(key: str) -> None
 get_memory() -> dict[str, str]
 
+# Working memory (task-scoped; cleared by clear_session())
+remember_working(key: str, value: str) -> None
+forget_working(key: str) -> None
+get_working_memory() -> dict[str, str]
+clear_working_memory() -> None
+
 # Session
-clear_session() -> None
+clear_session() -> None      # also clears working memory; preserves long-term memory
 get_session() -> list[dict]
 get_session_id() -> str
+
+# Token usage tracking
+get_usage() -> UsageSummary   # accumulated since last reset_usage()
+reset_usage() -> None
 
 # Context managers (classmethods)
 get_proxy()   -> Generator[ActorProxy]       # synchronous context manager

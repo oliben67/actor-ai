@@ -79,7 +79,9 @@ class AIActor(pykka.ThreadingActor):
     def on_start(self) -> None:
         self._session: list[dict] = []
         self._memory: dict[str, str] = {}
+        self._working_memory: dict[str, str] = {}
         self._session_id: str = new_session_id()
+        self._usage: UsageSummary = UsageSummary()
 
     # ------------------------------------------------------------------ #
     # Message routing                                                      #
@@ -146,9 +148,11 @@ class AIActor(pykka.ThreadingActor):
             tools=extract_tools(self),
             dispatcher=self._dispatch_tool,
             max_tokens=self.max_tokens,
-            on_usage=_on_usage if self.ledger is not None else None,
+            on_usage=_on_usage,
             monitoring_context=monitoring_ctx,
         )
+
+        self._usage += accumulated
 
         if self.ledger is not None:
             self.ledger.record(
@@ -175,8 +179,13 @@ class AIActor(pykka.ThreadingActor):
         self._memory.pop(key, None)
 
     def clear_session(self) -> None:
-        """Discard the current conversation session and start a new session ID."""
+        """Discard the current conversation session and start a new session ID.
+
+        Also clears working memory (task-scoped facts that do not survive a session reset).
+        Long-term memory (``remember()``/``forget()``) is unaffected.
+        """
         self._session.clear()
+        self._working_memory.clear()
         self._session_id = new_session_id()
 
     def get_session(self) -> list[dict]:
@@ -191,15 +200,55 @@ class AIActor(pykka.ThreadingActor):
         """Return the current session ID (changes after every ``clear_session()``)."""
         return self._session_id
 
+    # Working memory ---------------------------------------------------- #
+
+    def remember_working(self, key: str, value: str) -> None:
+        """Store a task-scoped fact injected into the system prompt for this session.
+
+        Working memory is cleared by ``clear_session()``.  Use it for ephemeral
+        context (current task goal, intermediate results) that should not persist
+        across sessions.  For durable facts use ``remember()`` instead.
+        """
+        self._working_memory[key] = value
+
+    def forget_working(self, key: str) -> None:
+        """Remove a working-memory fact (no-op if the key does not exist)."""
+        self._working_memory.pop(key, None)
+
+    def get_working_memory(self) -> dict[str, str]:
+        """Return a copy of the current working-memory store."""
+        return dict(self._working_memory)
+
+    def clear_working_memory(self) -> None:
+        """Remove all working-memory facts without resetting the session."""
+        self._working_memory.clear()
+
+    # Usage tracking ---------------------------------------------------- #
+
+    def get_usage(self) -> UsageSummary:
+        """Return a snapshot of token usage accumulated since the last ``reset_usage()``."""
+        return UsageSummary(
+            input_tokens=self._usage.input_tokens,
+            output_tokens=self._usage.output_tokens,
+        )
+
+    def reset_usage(self) -> None:
+        """Reset the internal usage counter to zero."""
+        self._usage = UsageSummary()
+
     # ------------------------------------------------------------------ #
     # Internal helpers                                                     #
     # ------------------------------------------------------------------ #
 
     def _effective_system_prompt(self) -> str:
-        if not self._memory:
-            return self.system_prompt
-        facts = "\n".join(f"- {k}: {v}" for k, v in self._memory.items())
-        return f"{self.system_prompt}\n\nKnown facts:\n{facts}"
+        result = self.system_prompt
+        if self._memory:
+            facts = "\n".join(f"- {k}: {v}" for k, v in self._memory.items())
+            result = f"{result}\n\nKnown facts:\n{facts}"
+        if self._working_memory:
+            working = "\n".join(f"- {k}: {v}" for k, v in self._working_memory.items())
+            result = f"{result}\n\nWorking memory:\n{working}"
+        return result
 
     def _trim_session(self) -> None:
         if self.max_history > 0:

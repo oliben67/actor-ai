@@ -1,15 +1,19 @@
-"""03 – Long-Term Memory
+"""03 – Memory tiers
 
-Memory persists named facts *across* turns and survives clear_session().
-Facts are automatically injected into the system prompt so the LLM sees them
-on every call.
+actor-ai has three memory tiers:
 
-This example shows:
-  - remember(key, value): store a fact
-  - forget(key): remove a fact
-  - get_memory(): inspect the current memory store
-  - Facts visible even after clear_session()
-  - Memory shared across sessions via the same actor instance
+  1. Short-term (session history)  — rolling conversation turns, trimmed by
+     max_history.  Cleared by clear_session().
+
+  2. Working memory                — task-scoped key/value facts injected into
+     the system prompt as "Working memory:".  Cleared by clear_session() or
+     clear_working_memory().  Use for ephemeral task context.
+
+  3. Long-term memory              — durable key/value facts injected as
+     "Known facts:".  Survives clear_session().  Use for user preferences and
+     persistent context.
+
+This example runs without an API key — the fake provider echoes preset replies.
 
 Real-LLM swap
 -------------
@@ -37,34 +41,32 @@ class PersonalAssistant(AIActor):
     system_prompt = "You are a personal assistant. Always use the stored facts when replying."
     provider = ScriptedProvider(
         [
-            # Q1: who am I?
+            # Long-term: who am I?
             "You are Alice, a Software Engineer at Acme Corp.",
-            # Q2: current task?
+            # Working: current task
             "Your current task is the Q3 report, due this Friday.",
-            # Q3: project?
-            "Project Orion is your top priority right now.",
-            # After forgetting 'name':
-            "I know you work at Acme Corp as a Software Engineer, "
-            "but I don't have your name on file.",
-            # After clear_session (memory persists):
-            "Welcome back! You're Alice from Acme Corp — Project Orion is your priority.",
+            # Working: project context was cleared — no task context available
+            "I see you are Alice at Acme Corp, but I have no task context right now.",
+            # Long-term survives clear_session; working was reset
+            "Welcome back, Alice from Acme Corp! What can I help you with?",
+            # Working memory set again in the new session
+            "You are reviewing the Orion roadmap draft.",
         ]
     )
 
 
-def _show_memory(proxy) -> None:
+def _show_memory(label: str, proxy) -> None:
     mem = proxy.get_memory().get()
-    if not mem:
-        print("  (empty)")
-    else:
-        for k, v in mem.items():
-            print(f"  {k!r:20} → {v!r}")
+    working = proxy.get_working_memory().get()
+    print(f"\n  [{label}]")
+    print(f"  Long-term  : {mem or '(empty)'}")
+    print(f"  Working    : {working or '(empty)'}")
 
 
 def _divider(title: str) -> None:
-    print(f"\n{'─' * 50}")
+    print(f"\n{'─' * 55}")
     print(f"  {title}")
-    print(f"{'─' * 50}")
+    print(f"{'─' * 55}")
 
 
 def main() -> None:
@@ -72,59 +74,65 @@ def main() -> None:
     proxy = ref.proxy()
 
     try:
-        # ── Store initial facts ──────────────────────────────────────────
-        _divider("Store facts with remember()")
+        # ── Tier 3: Long-term memory ─────────────────────────────────────
+        _divider("Tier 3 — Long-term memory (remember / forget)")
 
         proxy.remember("name", "Alice").get()
         proxy.remember("role", "Software Engineer").get()
         proxy.remember("company", "Acme Corp").get()
 
-        print("Memory after initial setup:")
-        _show_memory(proxy)
+        _show_memory("after remember()", proxy)
 
         r1 = proxy.instruct("Who am I?").get()
-        print("\n[Q] Who am I?")
-        print(f"[A] {r1}")
+        print(f"\n  [Q] Who am I?\n  [A] {r1}")
 
-        # ── Add more facts ───────────────────────────────────────────────
-        _divider("Add more facts")
+        # ── Tier 2: Working memory ────────────────────────────────────────
+        _divider("Tier 2 — Working memory (remember_working / forget_working)")
 
-        proxy.remember("current_task", "Q3 report due Friday").get()
-        r2 = proxy.instruct("What is my current task?").get()
-        print("[Q] What is my current task?")
-        print(f"[A] {r2}")
+        proxy.remember_working("current_task", "Q3 report due Friday").get()
+        proxy.remember_working("priority_project", "Orion").get()
 
-        proxy.remember("priority_project", "Orion").get()
-        r3 = proxy.instruct("Which project should I focus on?").get()
-        print("\n[Q] Which project should I focus on?")
-        print(f"[A] {r3}")
+        _show_memory("after remember_working()", proxy)
 
-        # ── Forget a fact ────────────────────────────────────────────────
-        _divider("forget() a single fact")
+        r2 = proxy.instruct("What am I working on?").get()
+        print(f"\n  [Q] What am I working on?\n  [A] {r2}")
 
-        proxy.forget("name").get()
-        print("Memory after forgetting 'name':")
-        _show_memory(proxy)
+        # Working memory can be cleared alone
+        proxy.clear_working_memory().get()
+        _show_memory("after clear_working_memory()", proxy)
 
-        r4 = proxy.instruct("Do you know my name?").get()
-        print("\n[Q] Do you know my name?")
-        print(f"[A] {r4}")
+        r3 = proxy.instruct("What is my current task?").get()
+        print(f"\n  [Q] What is my current task?\n  [A] {r3}")
 
-        # ── Memory survives clear_session() ──────────────────────────────
-        _divider("Memory survives clear_session()")
+        # ── clear_session() — working reset, long-term survives ───────────
+        _divider("clear_session() — working memory reset, long-term survives")
 
-        proxy.remember("name", "Alice").get()  # restore it
+        proxy.remember_working("current_task", "reviewing Orion roadmap").get()
         old_sid = proxy.get_session_id().get()
         proxy.clear_session().get()
         new_sid = proxy.get_session_id().get()
 
-        print(f"Session cleared: {old_sid[:8]}… → {new_sid[:8]}…")
-        print("Memory after clear:")
-        _show_memory(proxy)
+        print(f"\n  Session: {old_sid[:8]}… → {new_sid[:8]}…")
+        _show_memory("after clear_session()", proxy)
 
-        r5 = proxy.instruct("Hello! Remember me?").get()
-        print("\n[Q] Hello! Remember me?")
-        print(f"[A] {r5}")
+        r4 = proxy.instruct("Hello! Remember me?").get()
+        print(f"\n  [Q] Hello! Remember me?\n  [A] {r4}")
+
+        # Rebuild working memory in new session
+        proxy.remember_working("current_task", "reviewing Orion roadmap draft").get()
+        r5 = proxy.instruct("What's my task for today?").get()
+        print(f"\n  [Q] What's my task for today?\n  [A] {r5}")
+
+        _show_memory("final state", proxy)
+
+        # ── Tier 1: Session history (short-term) ─────────────────────────
+        _divider("Tier 1 — Session history (get_session)")
+
+        session = proxy.get_session().get()
+        print(f"\n  Current session turns: {len(session) // 2}")
+        for i, msg in enumerate(session):
+            role_label = "  [user]     " if msg["role"] == "user" else "  [assistant]"
+            print(f"{role_label} {msg['content'][:60]!r}")
 
     finally:
         ref.stop()

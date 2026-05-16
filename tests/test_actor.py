@@ -547,3 +547,149 @@ class TestNoProvider:
 
     def test_provider_none_is_default(self):
         assert AIActor.provider is None
+
+
+# ---------------------------------------------------------------------------
+# Working memory
+# ---------------------------------------------------------------------------
+
+
+class TestWorkingMemory:
+    def test_working_memory_empty_on_start(self, actor_factory):
+        cls, _ = make_actor()
+        ref = actor_factory(cls)
+        assert ref.proxy().get_working_memory().get() == {}
+
+    def test_remember_working_stores_fact(self, actor_factory):
+        cls, _ = make_actor()
+        ref = actor_factory(cls)
+        ref.proxy().remember_working("task", "summarise Q3").get()
+        assert ref.proxy().get_working_memory().get() == {"task": "summarise Q3"}
+
+    def test_forget_working_removes_fact(self, actor_factory):
+        cls, _ = make_actor()
+        ref = actor_factory(cls)
+        ref.proxy().remember_working("k", "v").get()
+        ref.proxy().forget_working("k").get()
+        assert ref.proxy().get_working_memory().get() == {}
+
+    def test_forget_working_missing_key_is_no_op(self, actor_factory):
+        cls, _ = make_actor()
+        ref = actor_factory(cls)
+        ref.proxy().forget_working("nonexistent").get()  # must not raise
+
+    def test_clear_working_memory_removes_all(self, actor_factory):
+        cls, _ = make_actor()
+        ref = actor_factory(cls)
+        ref.proxy().remember_working("a", "1").get()
+        ref.proxy().remember_working("b", "2").get()
+        ref.proxy().clear_working_memory().get()
+        assert ref.proxy().get_working_memory().get() == {}
+
+    def test_get_working_memory_returns_copy(self, actor_factory):
+        cls, _ = make_actor()
+        ref = actor_factory(cls)
+        ref.proxy().remember_working("k", "v").get()
+        m = ref.proxy().get_working_memory().get()
+        m["k"] = "mutated"
+        assert ref.proxy().get_working_memory().get()["k"] == "v"
+
+    def test_clear_session_clears_working_memory(self, actor_factory):
+        cls, _ = make_actor()
+        ref = actor_factory(cls)
+        ref.proxy().remember_working("task", "draft").get()
+        ref.proxy().clear_session().get()
+        assert ref.proxy().get_working_memory().get() == {}
+
+    def test_clear_session_preserves_long_term_memory(self, actor_factory):
+        cls, _ = make_actor()
+        ref = actor_factory(cls)
+        ref.proxy().remember("name", "Alice").get()
+        ref.proxy().remember_working("task", "draft").get()
+        ref.proxy().clear_session().get()
+        assert ref.proxy().get_memory().get() == {"name": "Alice"}
+        assert ref.proxy().get_working_memory().get() == {}
+
+    def test_working_memory_injected_into_system_prompt(self, actor_factory):
+        cls, provider = make_actor()
+        ref = actor_factory(cls)
+        ref.proxy().remember_working("goal", "summarise report").get()
+        ref.proxy().instruct("hi").get()
+        system = provider.calls[0]["system"]
+        assert "Working memory" in system
+        assert "summarise report" in system
+
+    def test_working_memory_section_absent_when_empty(self, actor_factory):
+        cls, provider = make_actor()
+        ref = actor_factory(cls)
+        ref.proxy().instruct("hi").get()
+        assert "Working memory" not in provider.calls[0]["system"]
+
+    def test_both_memory_tiers_in_prompt(self, actor_factory):
+        cls, provider = make_actor()
+        ref = actor_factory(cls)
+        ref.proxy().remember("user", "Alice").get()
+        ref.proxy().remember_working("task", "draft report").get()
+        ref.proxy().instruct("hi").get()
+        system = provider.calls[0]["system"]
+        assert "Known facts" in system
+        assert "Working memory" in system
+        assert "Alice" in system
+        assert "draft report" in system
+
+
+# ---------------------------------------------------------------------------
+# Usage tracking
+# ---------------------------------------------------------------------------
+
+
+class TestUsageTracking:
+    def test_usage_zero_on_start(self, actor_factory):
+        cls, _ = make_actor()
+        ref = actor_factory(cls)
+        usage = ref.proxy().get_usage().get()
+        assert usage.input_tokens == 0
+        assert usage.output_tokens == 0
+
+    def test_usage_accumulated_after_instruct(self, actor_factory):
+        cls, _ = make_actor()
+        ref = actor_factory(cls)
+        ref.proxy().instruct("hello").get()
+        usage = ref.proxy().get_usage().get()
+        assert usage.input_tokens > 0
+        assert usage.output_tokens > 0
+
+    def test_usage_accumulates_across_calls(self, actor_factory):
+        cls, _ = make_actor(replies=["r1", "r2"])
+        ref = actor_factory(cls)
+        ref.proxy().instruct("first").get()
+        u1 = ref.proxy().get_usage().get()
+        ref.proxy().instruct("second").get()
+        u2 = ref.proxy().get_usage().get()
+        assert u2.input_tokens >= u1.input_tokens
+        assert u2.total_tokens > u1.total_tokens
+
+    def test_reset_usage_clears_counters(self, actor_factory):
+        cls, _ = make_actor()
+        ref = actor_factory(cls)
+        ref.proxy().instruct("hello").get()
+        ref.proxy().reset_usage().get()
+        usage = ref.proxy().get_usage().get()
+        assert usage.input_tokens == 0
+        assert usage.output_tokens == 0
+
+    def test_get_usage_returns_snapshot_not_reference(self, actor_factory):
+        cls, _ = make_actor()
+        ref = actor_factory(cls)
+        ref.proxy().instruct("hello").get()
+        u = ref.proxy().get_usage().get()
+        original_input = u.input_tokens
+        ref.proxy().instruct("second call").get()
+        assert u.input_tokens == original_input  # snapshot is immutable
+
+    def test_usage_tracked_without_ledger(self, actor_factory):
+        cls, _ = make_actor()  # no ledger attached
+        ref = actor_factory(cls)
+        ref.proxy().instruct("hello").get()
+        usage = ref.proxy().get_usage().get()
+        assert usage.total_tokens > 0
