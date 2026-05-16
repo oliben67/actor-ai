@@ -1,13 +1,17 @@
 # Future imports (must occur at the beginning of the file):
 from __future__ import annotations
 
+# Standard library imports:
+from collections.abc import AsyncGenerator, Callable, Generator
+from contextlib import asynccontextmanager, contextmanager
+
 # Third party imports:
 import pykka
 
 from .accounting import Ledger, MonitoringContext, UsageSummary, new_session_id
 from .messages import Forget, Instruct, Remember
 from .providers import LLMProvider
-from .tools import extract_tools
+from .tools import extract_tools, tool
 
 
 class AIActor(pykka.ThreadingActor):
@@ -208,3 +212,138 @@ class AIActor(pykka.ThreadingActor):
         if cls_attr is None or not getattr(cls_attr, "_is_ai_tool", False):
             raise ValueError(f"Tool {name!r} not found or not decorated with @tool")
         return getattr(self, name)(**args)
+
+    @classmethod
+    @contextmanager
+    def get_proxy(cls) -> Generator[pykka.ActorProxy]:
+        """Context manager that starts the actor, yields its proxy, then stops it.
+
+        Example::
+
+            with MyAgent.get_proxy() as proxy:
+                reply = proxy.instruct("Hello!").get()
+        """
+        ref = cls.start()
+        try:
+            yield ref.proxy()
+        finally:
+            ref.stop()
+
+    @classmethod
+    @asynccontextmanager
+    async def aget_proxy(cls) -> AsyncGenerator[pykka.ActorProxy]:
+        """Async context manager that starts the actor, yields its proxy, then stops it.
+
+        The actor itself runs in a thread (pykka's standard model). Use
+        ``asyncio.to_thread`` to call blocking proxy methods without blocking
+        the event loop.
+
+        Example::
+
+            async with MyAgent.aget_proxy() as proxy:
+                reply = await asyncio.to_thread(proxy.instruct("Hello!").get)
+        """
+        ref = cls.start()
+        try:
+            yield ref.proxy()
+        finally:
+            ref.stop()
+
+
+# ---------------------------------------------------------------------------
+# Agent factory
+# ---------------------------------------------------------------------------
+
+
+def _make_sub_agent_tool(cls: type[AIActor], agent_name: str) -> Callable:
+    """Return a @tool-decorated method that delegates instruct() to a sub-agent class."""
+
+    def delegate(self, instruction: str) -> str:
+        with cls.get_proxy() as proxy:
+            return proxy.instruct(instruction).get()
+
+    delegate.__name__ = agent_name
+    delegate.__doc__ = f"Delegate to the {agent_name} specialist agent."
+    return tool(delegate)
+
+
+def make_agent(
+    name: str,
+    system_prompt: str,
+    provider: LLMProvider | None = None,
+    *,
+    tools: list[Callable] | None = None,
+    sub_agents: dict[str, type[AIActor]] | None = None,
+    max_tokens: int = 4096,
+    max_history: int = 0,
+    ledger: Ledger | None = None,
+    actor_name: str | None = None,
+    monitoring: bool = False,
+) -> type[AIActor]:
+    """Create a configured AIActor subclass without writing a class definition.
+
+    Returns a class that can be started with ``.start()`` or used with
+    ``get_proxy()`` / ``aget_proxy()``.
+
+    Args:
+        name: Class name and default ``actor_name`` label in accounting reports.
+        system_prompt: System prompt sent on every ``instruct()`` call.
+        provider: LLM backend to use. ``None`` means no provider (pure actor).
+        tools: Callables to expose to the LLM. Functions already decorated with
+            ``@tool`` are used as-is; plain functions are auto-decorated.
+        sub_agents: Mapping of ``method_name → AIActor subclass``. Each entry
+            is auto-wired as a ``@tool`` method; when the LLM calls it the
+            sub-agent is started, instructed, and stopped automatically.
+        max_tokens: Maximum completion tokens (default 4096).
+        max_history: Rolling session window in turns; 0 = unlimited.
+        ledger: Attach a ``Ledger`` instance for token accounting.
+        actor_name: Human-readable label in accounting reports. Defaults to *name*.
+        monitoring: Forward metadata to LiteLLM when ``True``.
+
+    Example::
+
+        from actor_ai import make_agent, Claude, GPT
+
+        Researcher = make_agent(
+            "Researcher",
+            "You are a deep research specialist. Cite sources.",
+            Claude(),
+        )
+
+        Writer = make_agent(
+            "Writer",
+            "You write clear, concise summaries.",
+            GPT("gpt-4o"),
+        )
+
+        Orchestrator = make_agent(
+            "Orchestrator",
+            "Coordinate research and writing tasks. Use available tools.",
+            Claude(),
+            sub_agents={"researcher": Researcher, "writer": Writer},
+        )
+
+        with Orchestrator.get_proxy() as proxy:
+            reply = proxy.instruct("Write a report on climate change.").get()
+    """
+    attrs: dict[str, object] = {
+        "system_prompt": system_prompt,
+        "provider": provider,
+        "max_tokens": max_tokens,
+        "max_history": max_history,
+        "ledger": ledger,
+        "actor_name": actor_name or name,
+        "monitoring": monitoring,
+    }
+
+    if tools:
+        for fn in tools:
+            if not getattr(fn, "_is_ai_tool", False):
+                fn = tool(fn)
+            attrs[fn.__name__] = fn
+
+    if sub_agents:
+        for agent_name, agent_cls in sub_agents.items():
+            attrs[agent_name] = _make_sub_agent_tool(agent_cls, agent_name)
+
+    return type(name, (AIActor,), attrs)

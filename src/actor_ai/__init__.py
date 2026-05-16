@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from .accounting import Ledger, LedgerEntry, ModelRate, MonitoringContext, Rates, UsageSummary
-from .actor import AIActor
+from .actor import AIActor, make_agent
 from .chorus import Chorus, ChorusType
 from .messages import Forget, Instruct, Remember
 from .providers import (
@@ -21,6 +21,7 @@ from .workflow import Workflow, WorkflowState, WorkflowTransition
 
 __all__ = [
     "AIActor",
+    "make_agent",
     "Chorus",
     "ChorusType",
     "Claude",

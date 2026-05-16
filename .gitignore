@@ -15,3 +15,6 @@ htmlcov/
 
 # Claude-specific files
 .claude/
+
+# Copilot-specific files
+.copilot/

@@ -3,10 +3,10 @@
 ## Table of Contents
 
 1. [Core concepts](#1-core-concepts)
-2. [AIActor](#2-aiactor)
+2. [Defining agents](#2-defining-agents)
 3. [Session management](#3-session-management)
 4. [Memory](#4-memory)
-5. [Tool calling](#5-tool-calling)
+5. [Tool calling and sub-agents](#5-tool-calling-and-sub-agents)
 6. [Providers](#6-providers)
 7. [Chorus](#7-chorus)
 8. [Workflow](#8-workflow)
@@ -24,7 +24,7 @@
 ```
 your code
    │
-   │  ref.proxy().instruct("…").get()
+   │  proxy.instruct("…").get()
    ▼
 AIActor (thread)
    │
@@ -37,7 +37,7 @@ LLM API (Claude / GPT / Gemini / …)
 
 | Pattern | Meaning |
 |---|---|
-| `ref = MyActor.start()` | Start the actor; returns an `ActorRef` |
+| `ref = MyAgent.start()` | Start the actor; returns an `ActorRef` |
 | `ref.proxy().method(args).get()` | Call a method and wait for the result |
 | `ref.proxy().attribute.get()` | Read a class/instance attribute |
 | `ref.proxy().attribute = value` | Set an attribute on the running actor |
@@ -47,57 +47,185 @@ LLM API (Claude / GPT / Gemini / …)
 
 ---
 
-## 2. AIActor
+## 2. Defining agents
 
-`AIActor` is the base class for all AI agents.
+### 2.1 The recommended approach: `make_agent()`
+
+`make_agent()` creates a fully configured agent class in a single call — no subclassing needed. It is the preferred way to define agents because it is concise, composable, and makes agent hierarchies explicit.
 
 ```python
-from actor_ai import AIActor, Claude
+from actor_ai import make_agent, Claude, GPT
 
-class MyAgent(AIActor):
-    system_prompt = "You are a helpful assistant."
-    provider      = Claude()
-    max_tokens    = 4096
-    max_history   = 0       # 0 = unlimited session history
-    ledger        = None    # attach a Ledger to enable accounting
-    actor_name    = None    # human label used in accounting reports
-    monitoring    = False   # set True to enable LiteLLM monitoring
+Researcher = make_agent(
+    "Researcher",
+    "You are a deep research specialist. Cite sources.",
+    Claude(),
+)
+
+Writer = make_agent(
+    "Writer",
+    "You write clear, concise summaries for a general audience.",
+    GPT("gpt-4o"),
+)
 ```
 
-### Class attributes
+Use the returned class exactly like a hand-written `AIActor` subclass:
+
+```python
+# Manual start / stop
+ref = Researcher.start()
+reply = ref.proxy().instruct("Tell me about Mars.").get()
+ref.stop()
+
+# Synchronous context manager (recommended)
+with Researcher.get_proxy() as proxy:
+    reply = proxy.instruct("Tell me about Mars.").get()
+
+# Async context manager
+async with Researcher.aget_proxy() as proxy:
+    reply = await asyncio.to_thread(proxy.instruct("Tell me about Mars.").get)
+```
+
+### `make_agent()` parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `name` | `str` | *required* | Class name; also the default `actor_name` label in accounting |
+| `system_prompt` | `str` | *required* | System prompt sent on every `instruct()` call |
+| `provider` | `LLMProvider \| None` | `None` | LLM backend; `None` means no provider (pure actor) |
+| `tools` | `list[Callable] \| None` | `None` | Functions to expose to the LLM (auto-decorated if not already) |
+| `sub_agents` | `dict[str, type[AIActor]] \| None` | `None` | Agent classes auto-wired as `@tool` delegation methods |
+| `max_tokens` | `int` | `4096` | Maximum completion tokens |
+| `max_history` | `int` | `0` | Rolling session window in turns; `0` = unlimited |
+| `ledger` | `Ledger \| None` | `None` | Attach for token accounting |
+| `actor_name` | `str \| None` | `None` | Explicit accounting label; defaults to `name` |
+| `monitoring` | `bool` | `False` | Forward metadata to LiteLLM |
+
+### 2.2 Agent hierarchies with `sub_agents`
+
+The most powerful feature of `make_agent()` is `sub_agents`. Each entry is automatically wired as a `@tool` method: when the LLM calls it, a fresh instance of the named agent class is started, instructed, and stopped — with no routing code needed.
+
+```python
+from actor_ai import make_agent, Claude
+
+Researcher = make_agent(
+    "Researcher",
+    "You are a research specialist. Return concise, sourced facts.",
+    Claude(),
+)
+
+Writer = make_agent(
+    "Writer",
+    "You transform raw facts into polished prose.",
+    Claude(),
+)
+
+Critic = make_agent(
+    "Critic",
+    "You review drafts and suggest concrete improvements.",
+    Claude(),
+)
+
+# The LLM sees researcher, writer, and critic as callable tools.
+# It decides when and in what order to invoke them.
+Orchestrator = make_agent(
+    "Orchestrator",
+    (
+        "You coordinate research and writing. "
+        "Use researcher to gather facts, writer to draft, critic to review. "
+        "Return the final polished text."
+    ),
+    Claude(),
+    sub_agents={
+        "researcher": Researcher,
+        "writer": Writer,
+        "critic": Critic,
+    },
+)
+
+with Orchestrator.get_proxy() as proxy:
+    report = proxy.instruct("Write a report on climate change.").get()
+```
+
+Each sub-agent call is stateless (fresh start/stop per call). For sub-agents that must maintain a session, use the class-based approach and hold a reference to a running actor inside a `@tool` method.
+
+### 2.3 Injecting tools
+
+Pass plain callables or `@tool`-decorated functions via the `tools` parameter:
+
+```python
+from actor_ai import make_agent, tool, Claude
+
+@tool("Count words in a text.")
+def word_count(self, text: str) -> int:
+    return len(text.split())
+
+def celsius_to_fahrenheit(self, celsius: float) -> float:
+    "Convert Celsius to Fahrenheit."
+    return celsius * 9 / 5 + 32
+
+Analyst = make_agent(
+    "Analyst",
+    "Use tools for all calculations. Never guess.",
+    Claude(),
+    tools=[word_count, celsius_to_fahrenheit],   # auto-decorated if missing @tool
+)
+```
+
+### 2.4 Class-based approach (for complex agents)
+
+Use a full subclass when you need lifecycle hooks (`on_start`), access to `self` state inside tools, or logic that does not fit a simple function:
+
+```python
+from actor_ai import AIActor, tool, Claude
+
+class StatefulAnalyst(AIActor):
+    system_prompt = "You analyse data. Use tools."
+    provider      = Claude()
+
+    def on_start(self) -> None:
+        super().on_start()
+        self._cache: dict = {}    # per-instance state
+
+    @tool("Look up a value, caching results.")
+    def lookup(self, key: str) -> str:
+        if key not in self._cache:
+            self._cache[key] = expensive_lookup(key)
+        return self._cache[key]
+```
+
+**Rule of thumb:** reach for `make_agent()` first. Switch to a class only when `self` state or `on_start()` is genuinely needed.
+
+### 2.5 Agent without a provider
+
+`provider` defaults to `None`. An agent without a provider behaves like a plain pykka `ThreadingActor` — it can receive messages, manage memory, and participate in a `Chorus` without ever calling an LLM. Calling `instruct()` raises `RuntimeError`.
+
+```python
+DataNode = make_agent("DataNode", "Pure actor — no LLM.")
+
+ref = DataNode.start()
+ref.proxy().remember("context", "quarterly report").get()
+ref.stop()
+```
+
+### 2.6 AIActor class attributes
+
+When using the class-based approach, the following class attributes configure the agent:
 
 | Attribute | Type | Default | Description |
 |---|---|---|---|
 | `system_prompt` | `str` | `"You are a helpful AI agent."` | System prompt sent on every call |
-| `provider` | `LLMProvider \| None` | `None` | Which LLM backend to use; `None` means no provider |
+| `provider` | `LLMProvider \| None` | `None` | Which LLM backend to use |
 | `max_tokens` | `int` | `4096` | Maximum completion tokens |
 | `max_history` | `int` | `0` | Keep last N turns; 0 = unlimited |
 | `ledger` | `Ledger \| None` | `None` | Attach for token accounting |
 | `actor_name` | `str \| None` | `None` | Label in accounting (default: class name) |
 | `monitoring` | `bool` | `False` | Forward metadata to LiteLLM |
 
-### Starting and stopping
+### 2.7 instruct()
 
 ```python
-ref = MyAgent.start()           # starts the actor thread
-ref.proxy().instruct("hi").get()
-ref.stop()                      # joins the thread
-```
-
-Use a `try/finally` block to ensure cleanup:
-
-```python
-ref = MyAgent.start()
-try:
-    reply = ref.proxy().instruct("Hello!").get()
-finally:
-    ref.stop()
-```
-
-### instruct()
-
-```python
-reply: str = ref.proxy().instruct(
+reply: str = proxy.instruct(
     instruction,            # str: the user message
     history=None,           # list[dict] | None: explicit message list
     use_session=True,       # bool: accumulate in rolling session
@@ -109,33 +237,6 @@ reply: str = ref.proxy().instruct(
 - When `history` is provided, it is used as-is (the session is ignored).
 - Raises `RuntimeError` if `provider` is `None`.
 
-### AIActor without a provider
-
-`provider` defaults to `None`. An actor without a provider behaves like a plain pykka `ThreadingActor` — it can receive messages, manage memory, track session, and communicate with other actors. Calling `instruct()` raises `RuntimeError`.
-
-```python
-from actor_ai import AIActor
-
-class DataActor(AIActor):
-    pass  # no provider — pure actor, no LLM needed
-
-ref = DataActor.start()
-
-# Memory and session still work:
-ref.proxy().remember("context", "quarterly report").get()
-ref.proxy().get_memory().get()   # → {"context": "quarterly report"}
-
-# instruct() raises RuntimeError without a provider:
-try:
-    ref.proxy().instruct("summarise").get()
-except RuntimeError as exc:
-    print(exc)   # "No provider configured. Set a provider class attribute: …"
-
-ref.stop()
-```
-
-This is useful for pure coordination actors, data-processing nodes, or actors that act as sinks in a `Chorus` pipeline without invoking an LLM.
-
 ---
 
 ## 3. Session management
@@ -143,29 +244,25 @@ This is useful for pure coordination actors, data-processing nodes, or actors th
 The actor maintains a rolling list of `{"role": "user"/"assistant", "content": "…"}` messages. This list is prepended to every `instruct()` call so the LLM has full conversational context.
 
 ```python
-class ChatBot(AIActor):
-    system_prompt = "You are a friendly assistant."
-    provider      = Claude()
-    max_history   = 10      # keep last 10 turns (20 messages)
+ChatBot = make_agent(
+    "ChatBot",
+    "You are a friendly assistant.",
+    Claude(),
+    max_history=10,     # keep last 10 turns (20 messages)
+)
 
-ref = ChatBot.start()
-proxy = ref.proxy()
+with ChatBot.get_proxy() as proxy:
+    proxy.instruct("My name is Alice.").get()
+    reply = proxy.instruct("Do you remember my name?").get()
+    # → "Yes, you told me your name is Alice."
 
-proxy.instruct("My name is Alice.").get()
-proxy.instruct("Do you remember my name?").get()   # → "Yes, you told me your name is Alice."
-
-session = proxy.get_session().get()   # list[dict]
-print(len(session))                   # 4 (2 turns × 2 messages each)
+    session = proxy.get_session().get()   # list[dict]
+    print(len(session))                   # 4 (2 turns × 2 messages)
 ```
 
 ### max_history
 
 When `max_history > 0`, the actor keeps only the last `max_history` turns (2 × max_history messages). Older turns are dropped automatically after each call.
-
-```python
-class TightMemory(AIActor):
-    max_history = 3   # 3-turn sliding window
-```
 
 ### clear_session()
 
@@ -218,9 +315,15 @@ memory: dict[str, str] = proxy.get_memory().get()
 
 ---
 
-## 5. Tool calling
+## 5. Tool calling and sub-agents
 
-Methods decorated with `@tool` are exposed to the LLM as callable functions. The actor dispatches calls automatically and feeds results back to the LLM.
+### 5.1 Sub-agents via `make_agent()`
+
+The simplest way to wire sub-agents is the `sub_agents` parameter of `make_agent()` (see [Section 2.2](#22-agent-hierarchies-with-sub_agents)). Each named entry becomes a `@tool` method that the LLM can call to delegate work.
+
+### 5.2 `@tool` decorator
+
+For the class-based approach, decorate methods with `@tool`:
 
 ```python
 from actor_ai import AIActor, tool, Claude
@@ -239,22 +342,43 @@ class Calculator(AIActor):
         return base ** exponent
 ```
 
-### `@tool` decorator
-
 ```python
-# Form 1: decorator with docstring description
+# Form 1: description from docstring
 @tool
 def my_method(self, x: int) -> str:
     """Description seen by the LLM."""
     ...
 
-# Form 2: explicit description string (overrides docstring)
+# Form 2: explicit description string
 @tool("Explicit description.")
 def my_method(self, x: int) -> str:
     ...
 ```
 
-### Type annotations and JSON Schema
+### 5.3 Sub-agents as `@tool` methods (class-based)
+
+When you need persistent sub-agents that maintain their own session, start them before the orchestrator and capture their refs in `@tool` closures or `on_start()`:
+
+```python
+class Orchestrator(AIActor):
+    system_prompt = "Coordinate research and writing."
+    provider      = Claude()
+
+    def on_start(self) -> None:
+        super().on_start()
+        self._researcher = Researcher.start()
+        self._writer     = Writer.start()
+
+    @tool("Delegate a research question to the research specialist.")
+    def research(self, query: str) -> str:
+        return self._researcher.proxy().instruct(query).get()
+
+    @tool("Delegate a writing task to the writing specialist.")
+    def write(self, content: str) -> str:
+        return self._writer.proxy().instruct(content).get()
+```
+
+### 5.4 Type annotations and JSON Schema
 
 Parameter types are converted to JSON Schema types automatically:
 
@@ -278,7 +402,7 @@ def greet(self, name: str, formal: bool = False) -> str:
 # name is required; formal is optional
 ```
 
-### How tool calling works
+### 5.5 How tool calling works
 
 1. The LLM receives the tool specs alongside the conversation.
 2. If the LLM wants to call a tool, it emits a tool-use response.
@@ -297,14 +421,9 @@ This loop runs entirely inside `provider.run()` — from the caller's perspectiv
 ```python
 from actor_ai import Claude
 
-class MyAgent(AIActor):
-    provider = Claude()                              # defaults
-    provider = Claude("claude-opus-4-7",
-                      temperature=0.2,
-                      top_p=0.9,
-                      top_k=40,
-                      timeout=30.0,
-                      stop_sequences=["STOP"])
+Researcher = make_agent("Researcher", "You research.", Claude())
+Researcher = make_agent("Researcher", "You research.",
+    Claude("claude-opus-4-7", temperature=0.2, top_p=0.9, timeout=30.0))
 ```
 
 | Parameter | Type | Description |
@@ -322,12 +441,10 @@ class MyAgent(AIActor):
 ```python
 from actor_ai import GPT
 
-provider = GPT()                                    # gpt-4o
-provider = GPT("gpt-4o-mini",
-               temperature=0.0,
-               seed=42,
-               frequency_penalty=0.3,
-               response_format={"type": "json_object"})
+Writer = make_agent("Writer", "You write.", GPT())
+Writer = make_agent("Writer", "You write.",
+    GPT("gpt-4o-mini", temperature=0.0, seed=42,
+        frequency_penalty=0.3, response_format={"type": "json_object"}))
 ```
 
 | Parameter | Type | Description |
@@ -348,8 +465,9 @@ provider = GPT("gpt-4o-mini",
 ```python
 from actor_ai import Gemini
 
-provider = Gemini()                                 # gemini-2.0-flash
-provider = Gemini("gemini-1.5-pro", temperature=0.4, top_p=0.95)
+agent = make_agent("Agent", "You assist.", Gemini())
+agent = make_agent("Agent", "You assist.",
+    Gemini("gemini-1.5-pro", temperature=0.4, top_p=0.95))
 ```
 
 Reads `GOOGLE_API_KEY`. Uses Google's OpenAI-compatible endpoint.
@@ -359,8 +477,9 @@ Reads `GOOGLE_API_KEY`. Uses Google's OpenAI-compatible endpoint.
 ```python
 from actor_ai import Mistral
 
-provider = Mistral()                                # mistral-large-latest
-provider = Mistral("mistral-small-latest", temperature=0.7)
+agent = make_agent("Agent", "You assist.", Mistral())
+agent = make_agent("Agent", "You assist.",
+    Mistral("mistral-small-latest", temperature=0.7))
 ```
 
 Reads `MISTRAL_API_KEY`.
@@ -370,34 +489,29 @@ Reads `MISTRAL_API_KEY`.
 ```python
 from actor_ai import DeepSeek
 
-provider = DeepSeek()                               # deepseek-chat
-provider = DeepSeek("deepseek-reasoner", temperature=0.0, seed=0)
+agent = make_agent("Agent", "You assist.", DeepSeek())
+agent = make_agent("Agent", "You assist.",
+    DeepSeek("deepseek-reasoner", temperature=0.0, seed=0))
 ```
 
 Reads `DEEPSEEK_API_KEY`.
 
 ### Copilot (GitHub)
 
-Routes requests through GitHub Copilot's OpenAI-compatible endpoint (`https://api.githubcopilot.com`). Requires a GitHub account with an active Copilot subscription (Individual, Business, or Enterprise).
+Routes requests through GitHub Copilot's OpenAI-compatible endpoint. Requires a GitHub account with an active Copilot subscription.
 
 Token resolution order (first match wins):
 
 1. `api_key` constructor argument
 2. `GITHUB_TOKEN` environment variable
-3. `gh auth token` CLI — works automatically when the [GitHub CLI](https://cli.github.com/) is authenticated (`gh auth login`), no env var required
+3. `gh auth token` CLI — works automatically when the [GitHub CLI](https://cli.github.com/) is authenticated
 
 ```python
-from actor_ai import AIActor, Copilot
+from actor_ai import Copilot, CopilotModel
 
-class Assistant(AIActor):
-    system_prompt = "You are a helpful coding assistant."
-    provider = Copilot()                        # gpt-4o (default)
-    provider = Copilot("claude-sonnet-4-5")     # Claude via Copilot
-    provider = Copilot("gemini-2.0-flash",
-                       temperature=0.2,
-                       seed=42)
+agent = make_agent("Agent", "You assist.", Copilot())
+agent = make_agent("Agent", "You assist.", Copilot("claude-sonnet-4-5"))
 
-# Inspect valid models at runtime
 print(Copilot.MODELS)   # frozenset of valid model strings
 ```
 
@@ -413,16 +527,7 @@ print(Copilot.MODELS)   # frozenset of valid model strings
 | `claude-sonnet-4-5` | Anthropic Claude via Copilot |
 | `gemini-2.0-flash` | Google Gemini via Copilot |
 
-Passing any other model string raises `ValueError` immediately at construction time — before any network call. Use `Copilot.MODELS` (a `frozenset[str]`) for runtime validation, or rely on the `CopilotModel` `Literal` type for IDE autocompletion.
-
-```python
-from actor_ai import CopilotModel   # Literal["gpt-4o", "gpt-4o-mini", ...]
-
-try:
-    Copilot("gpt-3.5-turbo")
-except ValueError as exc:
-    print(exc)   # Unsupported Copilot model 'gpt-3.5-turbo'. Valid models: ...
-```
+Passing any other model string raises `ValueError` at construction time. Use `Copilot.MODELS` (a `frozenset[str]`) for runtime validation, or the `CopilotModel` `Literal` for IDE autocompletion.
 
 #### Parameters
 
@@ -436,8 +541,6 @@ except ValueError as exc:
 | `stop` | `list[str] \| str \| None` | Stop sequences |
 | `seed` | `int \| None` | Deterministic sampling (best-effort) |
 
-The `Copilot-Integration-Id: vscode-chat` header is sent automatically so GitHub's backend routes the request correctly.
-
 ### LiteLLM
 
 See [Section 10 — Monitoring with LiteLLM](#10-monitoring-with-litellm) for full details.
@@ -445,11 +548,11 @@ See [Section 10 — Monitoring with LiteLLM](#10-monitoring-with-litellm) for fu
 ```python
 from actor_ai import LiteLLM
 
-provider = LiteLLM("openai/gpt-4o")
-provider = LiteLLM("anthropic/claude-sonnet-4-6",
-                   temperature=0.2,
-                   max_retries=3,
-                   success_callbacks=["langfuse"])
+agent = make_agent("Agent", "You assist.", LiteLLM("openai/gpt-4o"))
+agent = make_agent("Agent", "You assist.",
+    LiteLLM("anthropic/claude-sonnet-4-6",
+            temperature=0.2, max_retries=3,
+            success_callbacks=["langfuse"]))
 ```
 
 ### Swapping providers at runtime
@@ -466,18 +569,13 @@ The next `instruct()` call will use the new provider.
 
 ## 7. Chorus
 
-`Chorus` manages a named group of actors and provides three coordination patterns. Members can be `AIActor` instances, other `Chorus` instances, or any plain pykka actor that exposes an `instruct()` method.
+`Chorus` manages a named group of actors and provides three coordination patterns. Members can be agents created with `make_agent()`, class-based `AIActor` subclasses, other `Chorus` instances, or any plain pykka actor that exposes an `instruct()` method.
 
 ```python
-from actor_ai import AIActor, Chorus, ChorusType, Claude, GPT
+from actor_ai import Chorus, make_agent, Claude, GPT
 
-class Researcher(AIActor):
-    system_prompt = "You are a research specialist."
-    provider      = Claude()
-
-class Writer(AIActor):
-    system_prompt = "You are a creative writer."
-    provider      = GPT("gpt-4o")
+Researcher = make_agent("Researcher", "You research.", Claude())
+Writer     = make_agent("Writer",     "You write.",    GPT("gpt-4o"))
 
 researcher_ref = Researcher.start()
 writer_ref     = Writer.start()
@@ -540,62 +638,41 @@ final: str = chorus.pipeline(
 ### Agent management
 
 ```python
-# Add / remove at construction or runtime
 chorus.add("editor", editor_ref).get()
 chorus.remove("editor").get()
 
-# Semantic aliases for add / remove
-chorus.join("reviewer", reviewer_ref).get()   # same as add()
-chorus.leave("reviewer").get()                # same as remove()
+chorus.join("reviewer", reviewer_ref).get()   # alias for add()
+chorus.leave("reviewer").get()                # alias for remove()
 
-# List agents
 names: list[str] = chorus.agents().get()
-
-# Stop specific agents (also removes from chorus)
-chorus.stop_agents(names=["reviewer"]).get()
-
-# Stop all agents
-chorus.stop_agents().get()
+chorus.stop_agents(names=["reviewer"]).get()  # stop specific agents
+chorus.stop_agents().get()                    # stop all agents
 ```
 
 ### Memory broadcast
 
-`remember()` / `forget()` calls propagate to **all members** automatically, including nested choruses and non-AI actors (if they expose the matching method):
+`remember()` / `forget()` calls propagate to **all members** automatically, including nested choruses and non-AI actors:
 
 ```python
-# Store a fact in all agents
 chorus.remember("audience", "general public").get()
-
-# Store in specific agents only
 chorus.remember("style", "academic", names=["researcher"]).get()
-
-# Forget from all agents
 chorus.forget("style").get()
-
-# Forget from specific agents
 chorus.forget("audience", names=["writer"]).get()
 ```
 
-Memory propagation also works via the message API: `ref.tell(Remember("key", "val"))` delivered to a Chorus is forwarded to all members.
-
 ### Nested choruses
-
-A `Chorus` can be a member of another `Chorus`. `broadcast()` and memory propagation cascade correctly through nesting:
 
 ```python
 inner = Chorus.start(agents={"a": a_ref, "b": b_ref}, type="team")
 outer = Chorus.start(agents={"inner": inner, "c": c_ref}, type="department")
 
-# Broadcasts to inner (which broadcasts to a and b) and to c
 outer.proxy().broadcast("Announce yourselves.").get()
-
-# Memory flows to a, b, and c
 outer.proxy().remember("project", "Atlas").get()
 ```
 
 ### Non-AI actors as members
 
-Any pykka actor that exposes an `instruct(instruction)` method can be a Chorus member. Plain actors do not need to extend `AIActor`:
+Any pykka actor that exposes an `instruct(instruction)` method can be a Chorus member:
 
 ```python
 import pykka
@@ -624,14 +701,20 @@ chorus_ref = Chorus.start(agents={"logger": logger_ref, "writer": writer_ref})
 **WorkflowState** maps a state name to an actor (or group of parallel actors) plus an instruction template:
 
 ```python
-from actor_ai import WorkflowState
+from actor_ai import WorkflowState, make_agent, Claude
 
-# Single actor or Chorus
-WorkflowState(chorus=review_chorus, instruction="Review this:\n{output}")
+Draft  = make_agent("Drafter",  "You draft documents.", Claude())
+Review = make_agent("Reviewer", "You review quality.",  Claude())
+
+draft_ref  = Draft.start()
+review_ref = Review.start()
+
+WorkflowState(chorus=draft_ref,  instruction="{input}")
+WorkflowState(chorus=review_ref, instruction="Review this:\n{output}")
 
 # Parallel actors — all fired simultaneously, replies combined as "name: reply\n…"
 WorkflowState(
-    chorus={"researcher": researcher_ref, "critic": critic_ref},
+    chorus={"researcher": r_ref, "critic": c_ref},
     instruction="Analyse: {input}",
 )
 ```
@@ -643,20 +726,13 @@ WorkflowState(
 | `{input}` | The original instruction passed to `run()` / `step()` |
 | `{output}` | The reply produced by the immediately preceding state |
 
-Literal braces that are not template markers must be doubled (`{{` / `}}`).
-
 **WorkflowTransition** is a directed edge:
 
 ```python
 from actor_ai import WorkflowTransition
 
-# Guard — fires automatically when the reply matches a predicate
 WorkflowTransition("draft", "review", guard=lambda r: "ready" in r)
-
-# Event — fires when Workflow.event(name) is called
 WorkflowTransition("review", "draft", on_event="reject")
-
-# Both — first matching condition wins
 WorkflowTransition("analyse", "approve",
                    guard=lambda r: "approved" in r,
                    on_event="force_approve")
@@ -665,40 +741,46 @@ WorkflowTransition("analyse", "approve",
 ### Creating a workflow
 
 ```python
-from actor_ai import Workflow, WorkflowState, WorkflowTransition
+from actor_ai import Workflow, WorkflowState, WorkflowTransition, make_agent, Claude
+
+Draft    = make_agent("Drafter",   "You draft documents.",     Claude())
+Reviewer = make_agent("Reviewer",  "You review quality.",      Claude())
+Approver = make_agent("Approver",  "You give final sign-off.", Claude())
 
 wf = Workflow.start(
     states={
-        "draft":  WorkflowState(draft_chorus,  instruction="{input}"),
-        "review": WorkflowState(review_chorus, instruction="Review:\n{output}"),
+        "draft":   WorkflowState(Draft.start(),    instruction="{input}"),
+        "review":  WorkflowState(Reviewer.start(), instruction="Review:\n{output}"),
+        "approve": WorkflowState(Approver.start(), instruction="Finalise:\n{output}"),
     },
     transitions=[
-        WorkflowTransition("draft", "review", guard=lambda r: "ready" in r),
-        WorkflowTransition("review", "draft", on_event="reject"),
+        WorkflowTransition("draft",  "review",  guard=lambda r: "ready" in r),
+        WorkflowTransition("review", "approve", guard=lambda r: "approved" in r),
+        WorkflowTransition("review", "draft",   on_event="reject"),
     ],
     initial_state="draft",
 )
+
+output = wf.proxy().run("Please draft a Q3 proposal.").get()
+wf.stop()
 ```
 
 ### Blocking execution — run() and step()
 
-**`run(instruction)`** — executes from the current state and follows guard transitions until no guard matches (terminal state). Event-only transitions do not block `run()`. Blocks the calling thread until complete.
+**`run(instruction)`** — executes from the current state and follows guard transitions until no guard matches (terminal state). Blocks the calling thread.
 
 ```python
 output: str = wf.proxy().run("Draft a proposal.").get()
 ```
 
-**`step(instruction)`** — executes the current state exactly once and applies the first matching guard transition. Does not loop.
+**`step(instruction)`** — executes the current state exactly once and applies the first matching guard transition.
 
 ```python
 out1 = wf.proxy().step("Begin the process.").get()
-# current state may have advanced via guard
 out2 = wf.proxy().step().get()   # instruction=None → uses last output as {input}
 ```
 
 ### Event transitions
-
-Fire a named event to trigger an event-based transition from the current state:
 
 ```python
 fired: bool = wf.proxy().event("reject").get()
@@ -720,61 +802,32 @@ wf.proxy().run_detached(
     on_error=lambda exc: print("Error:", exc),
 ).get()
 
-# Actor mailbox is free — fire events while the run is in progress
-wf.proxy().event("approve").get()
-
+wf.proxy().event("approve").get()   # actor mailbox is free during detached run
 done.wait(timeout=30)
 ```
 
-The three-phase protocol used internally:
-
-1. **Prepare** (`prepare_step`) — actor atomically reads the current state and formats the instruction.
-2. **Execute** — the actor(s) are invoked outside the workflow thread (slow, actor is free).
-3. **Commit** (`commit_step`) — actor atomically stores the output and advances the state.
-
-You can use `prepare_step` / `commit_step` directly for custom orchestration (see [Section 8 — Complete reference](#12-complete-reference)).
-
 ### Runtime modification
 
-States and transitions can be added or replaced on a running workflow:
-
 ```python
-# Add a new state
-wf.proxy().add_state(
-    "approve",
-    WorkflowState(approve_chorus, instruction="Finalise:\n{output}")
-).get()
-
-# Add a new transition
-wf.proxy().add_transition(
-    WorkflowTransition("review", "approve", on_event="approve")
-).get()
-
-# Remove a state
+wf.proxy().add_state("polish", WorkflowState(polish_ref, instruction="Polish:\n{output}")).get()
+wf.proxy().add_transition(WorkflowTransition("review", "polish", on_event="polish")).get()
 wf.proxy().remove_state("old_state").get()
-
-# Remove transitions from a source
-wf.proxy().remove_transitions("review").get()               # all from "review"
-wf.proxy().remove_transitions("review", "draft").get()      # only review→draft
+wf.proxy().remove_transitions("review").get()           # all from "review"
+wf.proxy().remove_transitions("review", "draft").get()  # only review→draft
 ```
 
 ### State inspection and control
 
 ```python
-# Force-jump to any registered state (raises KeyError if unknown)
-wf.proxy().set_state("review").get()
-
-# Read current state and last output
-state: str | None = wf.proxy().current_state().get()
-output: str       = wf.proxy().last_output().get()
-
-# List all registered state names
-names: list[str] = wf.proxy().states().get()
+wf.proxy().set_state("review").get()          # force-jump (raises KeyError if unknown)
+state:  str | None = wf.proxy().current_state().get()
+output: str        = wf.proxy().last_output().get()
+names:  list[str]  = wf.proxy().states().get()
 ```
 
 ### Parallel actor states
 
-Pass a `dict[str, ActorRef]` as `chorus` to fire multiple actors simultaneously. All actors receive the same instruction; their replies are combined as `"name: reply\n…"`:
+Pass a `dict[str, ActorRef]` as `chorus` to fire multiple actors simultaneously:
 
 ```python
 WorkflowState(
@@ -782,60 +835,11 @@ WorkflowState(
     instruction="Analyse: {input}",
 )
 # Combined output: "researcher: …\ncritic: …"
-```
 
-Guard predicates receive the combined string, so you can match keywords from any actor:
-
-```python
 WorkflowTransition(
     "analyse", "summarise",
-    guard=lambda r: "approved" in r   # matches if any actor replied "approved"
+    guard=lambda r: "approved" in r   # matches if any actor's reply contains it
 )
-```
-
-### Complete workflow example
-
-```python
-from actor_ai import AIActor, Chorus, Claude, Workflow, WorkflowState, WorkflowTransition
-
-class Drafter(AIActor):
-    system_prompt = "You draft documents."
-    provider = Claude()
-
-class Reviewer(AIActor):
-    system_prompt = "You review documents for quality."
-    provider = Claude()
-
-class Approver(AIActor):
-    system_prompt = "You give final sign-off."
-    provider = Claude()
-
-drafter_ref  = Drafter.start()
-reviewer_ref = Reviewer.start()
-approver_ref = Approver.start()
-
-draft_chorus  = Chorus.start(agents={"drafter":  drafter_ref})
-review_chorus = Chorus.start(agents={"reviewer": reviewer_ref})
-approve_chorus= Chorus.start(agents={"approver": approver_ref})
-
-wf = Workflow.start(
-    states={
-        "draft":   WorkflowState(draft_chorus,   instruction="{input}"),
-        "review":  WorkflowState(review_chorus,  instruction="Review:\n{output}"),
-        "approve": WorkflowState(approve_chorus, instruction="Finalise:\n{output}"),
-    },
-    transitions=[
-        WorkflowTransition("draft",  "review",  guard=lambda r: "ready" in r),
-        WorkflowTransition("review", "approve", guard=lambda r: "approved" in r),
-        WorkflowTransition("review", "draft",   on_event="reject"),
-    ],
-    initial_state="draft",
-)
-
-# Blocking run — follows guard chain until terminal
-output = wf.proxy().run("Please draft a Q3 proposal.").get()
-
-wf.stop()
 ```
 
 ---
@@ -847,14 +851,17 @@ The accounting layer records every `instruct()` call and calculates token spend.
 ### Ledger
 
 ```python
-from actor_ai import Ledger, Rates
+from actor_ai import Ledger, Rates, make_agent, Claude
 
 ledger = Ledger()
 
-class MyAgent(AIActor):
-    provider   = Claude()
-    ledger     = ledger          # attach the shared ledger
-    actor_name = "my-agent"      # label in reports (default: class name)
+Agent = make_agent(
+    "Agent",
+    "You assist.",
+    Claude(),
+    ledger=ledger,
+    actor_name="my-agent",
+)
 ```
 
 Each completed `instruct()` call appends one `LedgerEntry`:
@@ -863,30 +870,22 @@ Each completed `instruct()` call appends one `LedgerEntry`:
 #### Reading the ledger
 
 ```python
-# All entries
-entries: list[LedgerEntry] = ledger.entries()
-
-# Filtered
+entries: list[LedgerEntry]          = ledger.entries()
 entries_for_actor:   list[LedgerEntry] = ledger.entries_for_actor("my-agent")
 entries_for_session: list[LedgerEntry] = ledger.entries_for_session(session_id)
 entries_for_model:   list[LedgerEntry] = ledger.entries_for_model("claude-sonnet-4-6")
 
-# Aggregate usage
-total: UsageSummary                    = ledger.total_usage()
-by_actor:  dict[str, UsageSummary]     = ledger.usage_by_actor()
-by_model:  dict[str, UsageSummary]     = ledger.usage_by_model()
-by_session: dict[str, UsageSummary]    = ledger.usage_by_session()
+total: UsageSummary                 = ledger.total_usage()
+by_actor:  dict[str, UsageSummary]  = ledger.usage_by_actor()
+by_model:  dict[str, UsageSummary]  = ledger.usage_by_model()
+by_session: dict[str, UsageSummary] = ledger.usage_by_session()
 
-# Cost
 rates = Rates.default()
-total_cost:    float                   = ledger.total_cost(rates)
-by_actor_cost: dict[str, float]        = ledger.cost_by_actor(rates)
-by_model_cost: dict[str, float]        = ledger.cost_by_model(rates)
+total_cost:    float                = ledger.total_cost(rates)
+by_actor_cost: dict[str, float]     = ledger.cost_by_actor(rates)
+by_model_cost: dict[str, float]     = ledger.cost_by_model(rates)
 
-# Summary dict
 summary: dict = ledger.summary(rates)
-
-# Misc
 n: int = len(ledger)
 ledger.clear()
 ```
@@ -896,50 +895,12 @@ ledger.clear()
 ```python
 from actor_ai import Rates, ModelRate
 
-# Pre-populated with ~2025 rates for all built-in models
 rates = Rates.default()
-
-# Build from a dict
-rates = Rates.from_dict({
-    "my-model": {"input": 1.50, "output": 3.00},
-})
-
-# Override a single model at runtime
+rates = Rates.from_dict({"my-model": {"input": 1.50, "output": 3.00}})
 rates.set("gpt-4o", input_per_million=2.50, output_per_million=10.00)
-
-# Look up a rate
 rate: ModelRate | None = rates.get_rate("gpt-4o")
-
-# Calculate cost for a given usage
 cost: float = rates.cost("gpt-4o", usage_summary)
-
-# Check membership
 "gpt-4o" in rates   # True
-```
-
-### UsageSummary
-
-```python
-from actor_ai import UsageSummary
-
-u = UsageSummary(input_tokens=100, output_tokens=50)
-u.total_tokens   # 150
-
-# Supports addition
-total = u1 + u2
-total += u3
-```
-
-### LedgerEntry
-
-```python
-entry.actor_name     # str
-entry.model          # str
-entry.input_tokens   # int
-entry.output_tokens  # int
-entry.timestamp      # datetime (UTC)
-entry.session_id     # str | None
-entry.usage          # UsageSummary
 ```
 
 ### Default rates (approximate USD / million tokens, mid-2025)
@@ -964,47 +925,30 @@ Always verify current rates at each provider's pricing page before use in produc
 
 ## 10. Monitoring with LiteLLM
 
-When `monitoring = True`, the actor creates a `MonitoringContext` for every `instruct()` call and passes it to the provider. The `LiteLLM` provider forwards this context as the `metadata` kwarg to `litellm.completion()`, making it visible to any registered callbacks (Langfuse, Helicone, custom, etc.).
-
-### Enabling monitoring
+When `monitoring=True`, the actor creates a `MonitoringContext` for every `instruct()` call and passes it to the provider. The `LiteLLM` provider forwards this context as the `metadata` kwarg to `litellm.completion()`.
 
 ```python
-from actor_ai import AIActor, LiteLLM
+from actor_ai import make_agent, LiteLLM
 
-class MonitoredAgent(AIActor):
-    system_prompt = "You are a helpful assistant."
-    provider      = LiteLLM("openai/gpt-4o")
-    actor_name    = "support-bot"
-    monitoring    = True
-```
-
-When `monitoring = True`, every `instruct()` call forwards this to `litellm.completion()`:
-
-```python
-metadata = {
-    "actor_name": "support-bot",       # actor_name or class name
-    "session_id": "<uuid>",            # current session ID
-    # + any extra fields in MonitoringContext.metadata
-}
-```
-
-### MonitoringContext
-
-```python
-from actor_ai import MonitoringContext
-
-ctx = MonitoringContext(
-    actor_name = "my-agent",
-    session_id = "sess-abc123",
-    metadata   = {"user_id": "u42", "environment": "prod"},
+MonitoredAgent = make_agent(
+    "SupportBot",
+    "You are a helpful support assistant.",
+    LiteLLM("openai/gpt-4o"),
+    actor_name="support-bot",
+    monitoring=True,
 )
 ```
 
-`metadata` is merged into the dict forwarded to LiteLLM, so all three fields — `actor_name`, `session_id`, and any custom keys — arrive in the same flat dict.
+When `monitoring=True`, every `instruct()` call forwards this to `litellm.completion()`:
+
+```python
+metadata = {
+    "actor_name": "support-bot",
+    "session_id": "<uuid>",
+}
+```
 
 ### Registering callbacks
-
-Pass callback names (for built-in LiteLLM integrations) or callables directly to the `LiteLLM` constructor:
 
 ```python
 def my_callback(kwargs, response, start_time, end_time):
@@ -1031,9 +975,7 @@ provider = LiteLLM(
 | `success_callbacks` | `list \| None` | LiteLLM success callbacks |
 | `failure_callbacks` | `list \| None` | LiteLLM failure callbacks |
 
-### Monitoring with other providers
-
-The `monitoring_context` parameter is passed to every provider's `run()` method. Non-LiteLLM providers (`Claude`, `GPT`, etc.) silently ignore it — so you can safely set `monitoring = True` on an actor using any provider and switch later.
+The `monitoring_context` parameter is passed to every provider's `run()` method. Non-LiteLLM providers silently ignore it, so you can safely set `monitoring=True` on any agent and switch providers later.
 
 ---
 
@@ -1041,35 +983,31 @@ The `monitoring_context` parameter is passed to every provider's `run()` method.
 
 As a pykka actor, `AIActor` accepts raw message objects in addition to the proxy API.
 
-### Message types
-
 ```python
 from actor_ai import Instruct, Remember, Forget
 
 Instruct(
     instruction: str,
-    history:     list[dict] = [],    # explicit message list
+    history:     list[dict] = [],
     use_session: bool       = True,
 )
-
 Remember(key: str, value: str)
-
 Forget(key: str)
 ```
 
 ### ask() — synchronous
 
 ```python
-reply = ref.ask(Instruct("What is 2 + 2?"))              # → "4"
-ref.ask(Remember("name", "Alice"))                        # → None
-ref.ask(Forget("name"))                                   # → None
+reply = ref.ask(Instruct("What is 2 + 2?"))
+ref.ask(Remember("name", "Alice"))
+ref.ask(Forget("name"))
 ```
 
 ### tell() — fire-and-forget
 
 ```python
-ref.tell(Remember("name", "Alice"))    # does not block
-ref.tell(Forget("name"))               # does not block
+ref.tell(Remember("name", "Alice"))
+ref.tell(Forget("name"))
 ```
 
 pykka processes messages in FIFO order, so a `tell(Remember(…))` followed by `ask(Instruct(…))` is guaranteed to process the `Remember` first.
@@ -1088,6 +1026,24 @@ pykka processes messages in FIFO order, so a `tell(Remember(…))` followed by `
 
 ## 12. Complete reference
 
+### `make_agent()` — agent factory
+
+```python
+make_agent(
+    name: str,
+    system_prompt: str,
+    provider: LLMProvider | None = None,
+    *,
+    tools: list[Callable] | None = None,
+    sub_agents: dict[str, type[AIActor]] | None = None,
+    max_tokens: int = 4096,
+    max_history: int = 0,
+    ledger: Ledger | None = None,
+    actor_name: str | None = None,
+    monitoring: bool = False,
+) -> type[AIActor]
+```
+
 ### AIActor public API
 
 ```python
@@ -1103,12 +1059,15 @@ get_memory() -> dict[str, str]
 clear_session() -> None
 get_session() -> list[dict]
 get_session_id() -> str
+
+# Context managers (classmethods)
+get_proxy()   -> Generator[ActorProxy]       # synchronous context manager
+aget_proxy()  -> AsyncGenerator[ActorProxy]  # async context manager
 ```
 
 ### Chorus public API
 
 ```python
-# Agent management
 add(name: str, ref: ActorRef) -> None
 remove(name: str) -> None
 join(name: str, ref: ActorRef) -> None    # alias for add()
@@ -1116,50 +1075,41 @@ leave(name: str) -> None                  # alias for remove()
 agents() -> list[str]
 stop_agents(names: list[str] | None = None) -> None
 
-# Coordination
-instruct(instruction: str) -> str                          # broadcast form (single arg)
-instruct(name: str, instruction: str, **kwargs) -> str     # single-agent form (two args)
+instruct(instruction: str) -> str                          # broadcast (single arg)
+instruct(name: str, instruction: str, **kwargs) -> str     # single agent (two args)
 broadcast(instruction: str, **kwargs) -> dict[str, str]
 pipeline(names: list[str], instruction: str, **kwargs) -> str
 
-# Memory broadcast
 remember(key: str, value: str, names: list[str] | None = None) -> None
 forget(key: str, names: list[str] | None = None) -> None
 
-# Type
 type: ChorusType   # attribute (readable via proxy)
 ```
 
 ### Workflow public API
 
 ```python
-# State machine management
 add_state(name: str, state: WorkflowState) -> None
 remove_state(name: str) -> None
 add_transition(transition: WorkflowTransition) -> None
 remove_transitions(source: str, target: str | None = None) -> None
-set_state(name: str) -> None              # raises KeyError if unknown
+set_state(name: str) -> None
 
-# Inspection
 states() -> list[str]
 current_state() -> str | None
 last_output() -> str
 
-# Blocking execution
 step(instruction: str | None = None) -> str
 run(instruction: str | None = None) -> str
 
-# Non-blocking execution
 run_detached(
     instruction: str | None = None,
     on_complete: Callable[[str], None] | None = None,
     on_error: Callable[[Exception], None] | None = None,
 ) -> None
 
-# Event dispatch
 event(name: str) -> bool
 
-# Low-level coordination (used by run_detached; available for custom orchestration)
 prepare_step(instruction: str | None) -> tuple[ActorRef | dict[str, ActorRef], str] | None
 commit_step(output: str) -> bool
 ```
@@ -1187,32 +1137,25 @@ class WorkflowTransition:
 ### Ledger public API
 
 ```python
-# Write
 record(actor_name, model, input_tokens, output_tokens, session_id=None) -> None
 clear() -> None
 
-# Read — entries
 entries() -> list[LedgerEntry]
 entries_for_actor(actor_name) -> list[LedgerEntry]
 entries_for_session(session_id) -> list[LedgerEntry]
 entries_for_model(model) -> list[LedgerEntry]
 
-# Read — usage
 total_usage() -> UsageSummary
 usage_by_actor() -> dict[str, UsageSummary]
 usage_by_model() -> dict[str, UsageSummary]
 usage_by_session() -> dict[str, UsageSummary]
 
-# Read — cost
 total_cost(rates: Rates) -> float
 cost_by_actor(rates: Rates) -> dict[str, float]
 cost_by_model(rates: Rates) -> dict[str, float]
 cost_by_session(rates: Rates) -> dict[str, float]
 
-# Summary
 summary(rates: Rates | None = None) -> dict
-
-# Misc
 __len__() -> int
 ```
 
@@ -1228,19 +1171,19 @@ models() -> list[str]
 __contains__(model: str) -> bool
 ```
 
-### @tool decorator
+### `@tool` decorator
 
 ```python
 @tool                           # description from docstring
 @tool("Explicit description")   # explicit description
 ```
 
-The decorated method must be a regular instance method on an `AIActor` subclass. It will not appear in `extract_tools()` results for plain Python objects; only methods on running actors are dispatched.
-
 ### Exported symbols
 
 ```python
 from actor_ai import (
+    # Agent factory (recommended)
+    make_agent,
     # Actors
     AIActor, Chorus, ChorusType,
     # Workflow
