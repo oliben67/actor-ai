@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 # Standard library imports:
+import os
 from collections.abc import AsyncGenerator, Callable, Generator
 from contextlib import asynccontextmanager, contextmanager
+from pathlib import Path
+from typing import IO
 
 # Third party imports:
 import pykka
@@ -12,6 +15,25 @@ from .accounting import Ledger, MonitoringContext, UsageSummary, new_session_id
 from .messages import Forget, Instruct, Remember
 from .providers import LLMProvider
 from .tools import extract_tools, tool
+
+
+def _resolve_instruction(instruction: str | os.PathLike[str] | IO[str]) -> str:
+    """Resolve an instruction to a plain string.
+
+    Accepts a str, any os.PathLike (e.g. pathlib.Path), or a readable stream.
+    Binary streams and Path reads are decoded as UTF-8.
+    """
+    if isinstance(instruction, str):
+        return instruction
+    if isinstance(instruction, os.PathLike):
+        return Path(instruction).read_text(encoding="utf-8")
+    if hasattr(instruction, "read"):
+        content = instruction.read()
+        return content.decode("utf-8") if isinstance(content, bytes) else content
+    raise TypeError(
+        f"instruction must be a str, path-like object, or readable stream; "
+        f"got {type(instruction).__name__!r}"
+    )
 
 
 class AIActor(pykka.ThreadingActor):
@@ -108,11 +130,17 @@ class AIActor(pykka.ThreadingActor):
 
     def instruct(
         self,
-        instruction: str,
+        instruction: str | os.PathLike[str] | IO[str],
         history: list[dict] | None = None,
         use_session: bool = True,
     ) -> str:
-        """Process a natural language instruction, invoking @tool methods as needed."""
+        """Process a natural language instruction, invoking @tool methods as needed.
+
+        ``instruction`` may be a plain string, a :class:`pathlib.Path` (or any
+        ``os.PathLike``), or a readable text/binary stream.  Paths are read with
+        UTF-8 encoding; streams are read and decoded if they return bytes.
+        """
+        text = _resolve_instruction(instruction)
         if self.provider is None:
             raise RuntimeError(
                 "No provider configured. Set a provider class attribute:\n"
@@ -127,7 +155,7 @@ class AIActor(pykka.ThreadingActor):
         else:
             messages = []
 
-        messages.append({"role": "user", "content": instruction})
+        messages.append({"role": "user", "content": text})
 
         accumulated = UsageSummary()
 
@@ -164,7 +192,7 @@ class AIActor(pykka.ThreadingActor):
             )
 
         if use_session and history is None:
-            self._session.append({"role": "user", "content": instruction})
+            self._session.append({"role": "user", "content": text})
             self._session.append({"role": "assistant", "content": reply})
             self._trim_session()
 

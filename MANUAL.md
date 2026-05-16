@@ -226,16 +226,36 @@ When using the class-based approach, the following class attributes configure th
 
 ```python
 reply: str = proxy.instruct(
-    instruction,            # str: the user message
+    instruction,            # str | Path | IO[str]: the user message
     history=None,           # list[dict] | None: explicit message list
     use_session=True,       # bool: accumulate in rolling session
 ).get()
+```
+
+`instruction` accepts three input forms:
+
+| Input | Behaviour |
+|---|---|
+| `str` | Used directly as the message text |
+| `pathlib.Path` (or any `os.PathLike`) | File is read with UTF-8 encoding |
+| Readable stream (`IO[str]` / `IO[bytes]`) | Stream is read; bytes are decoded as UTF-8 |
+
+```python
+from pathlib import Path
+import io
+
+proxy.instruct("What is the capital of France?").get()          # plain string
+proxy.instruct(Path("prompt.txt")).get()                        # file path
+proxy.instruct(open("prompt.txt")).get()                        # text file object
+proxy.instruct(io.StringIO("Summarise this.")).get()            # StringIO
+proxy.instruct(io.BytesIO(b"Summarise this.")).get()            # BytesIO
 ```
 
 - When `use_session=True` and `history=None` (default), the actor appends the turn to its session.
 - When `use_session=False`, the call is stateless — the session is not read or written.
 - When `history` is provided, it is used as-is (the session is ignored).
 - Raises `RuntimeError` if `provider` is `None`.
+- Raises `TypeError` if `instruction` is not a str, path-like, or readable stream.
 
 ---
 
@@ -1114,7 +1134,7 @@ make_agent(
 
 ```python
 # Instructions
-instruct(instruction, history=None, use_session=True) -> str
+instruct(instruction: str | Path | IO[str], history=None, use_session=True) -> str
 
 # Long-term memory
 remember(key: str, value: str) -> None

@@ -3,6 +3,9 @@
 # Future imports (must occur at the beginning of the file):
 from __future__ import annotations
 
+# Standard library imports:
+import io
+
 # Third party imports:
 import pytest
 
@@ -693,3 +696,53 @@ class TestUsageTracking:
         ref.proxy().instruct("hello").get()
         usage = ref.proxy().get_usage().get()
         assert usage.total_tokens > 0
+
+
+# ---------------------------------------------------------------------------
+# instruct() input types (Path and streams)
+# ---------------------------------------------------------------------------
+
+
+class TestInstructInputTypes:
+    def test_plain_string(self, actor_factory):
+        cls, provider = make_actor()
+        ref = actor_factory(cls)
+        ref.proxy().instruct("hello").get()
+        assert provider.calls[0]["messages"][-1]["content"] == "hello"
+
+    def test_path_object(self, actor_factory, tmp_path):
+        instruction_file = tmp_path / "instruction.txt"
+        instruction_file.write_text("hello from file", encoding="utf-8")
+        cls, provider = make_actor()
+        ref = actor_factory(cls)
+        ref.proxy().instruct(instruction_file).get()
+        assert provider.calls[0]["messages"][-1]["content"] == "hello from file"
+
+    def test_text_stream(self, actor_factory):
+        stream = io.StringIO("hello from stream")
+        cls, provider = make_actor()
+        ref = actor_factory(cls)
+        ref.proxy().instruct(stream).get()
+        assert provider.calls[0]["messages"][-1]["content"] == "hello from stream"
+
+    def test_binary_stream(self, actor_factory):
+        stream = io.BytesIO(b"hello from bytes")
+        cls, provider = make_actor()
+        ref = actor_factory(cls)
+        ref.proxy().instruct(stream).get()
+        assert provider.calls[0]["messages"][-1]["content"] == "hello from bytes"
+
+    def test_path_content_stored_in_session(self, actor_factory, tmp_path):
+        instruction_file = tmp_path / "task.txt"
+        instruction_file.write_text("file instruction", encoding="utf-8")
+        cls, _ = make_actor()
+        ref = actor_factory(cls)
+        ref.proxy().instruct(instruction_file).get()
+        session = ref.proxy().get_session().get()
+        assert session[0]["content"] == "file instruction"
+
+    def test_invalid_type_raises_type_error(self, actor_factory):
+        cls, _ = make_actor()
+        ref = actor_factory(cls)
+        with pytest.raises(TypeError, match="instruction must be"):
+            ref.proxy().instruct(12345).get()  # type: ignore[arg-type]
