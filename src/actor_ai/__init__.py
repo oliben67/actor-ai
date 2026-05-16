@@ -20,8 +20,8 @@ from .tools import tool
 from .workflow import Workflow, WorkflowState, WorkflowTransition
 
 __all__ = [
+    "GPT",
     "AIActor",
-    "make_agent",
     "Chorus",
     "ChorusType",
     "Claude",
@@ -29,13 +29,12 @@ __all__ = [
     "CopilotModel",
     "DeepSeek",
     "Forget",
-    "GPT",
     "Gemini",
     "Instruct",
+    "LLMProvider",
     "Ledger",
     "LedgerEntry",
     "LiteLLM",
-    "LLMProvider",
     "Mistral",
     "ModelRate",
     "MonitoringContext",
@@ -45,6 +44,7 @@ __all__ = [
     "Workflow",
     "WorkflowState",
     "WorkflowTransition",
+    "make_agent",
     "tool",
 ]
 

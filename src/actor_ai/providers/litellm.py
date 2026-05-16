@@ -123,15 +123,20 @@ class LiteLLM(LLMProvider):
 
             response = litellm.completion(**kwargs)
 
-            if on_usage is not None and response.usage is not None:
-                on_usage(
-                    UsageSummary(
-                        input_tokens=response.usage.prompt_tokens or 0,
-                        output_tokens=response.usage.completion_tokens or 0,
+            if on_usage is not None:
+                usage = getattr(response, "usage", None)
+                if usage is not None:
+                    on_usage(
+                        UsageSummary(
+                            input_tokens=getattr(usage, "prompt_tokens", None) or 0,
+                            output_tokens=getattr(usage, "completion_tokens", None) or 0,
+                        )
                     )
-                )
 
-            choice = response.choices[0]
+            choices = getattr(response, "choices", None)
+            if choices is None:
+                break
+            choice = choices[0]
 
             if choice.finish_reason == "stop":
                 return choice.message.content or ""

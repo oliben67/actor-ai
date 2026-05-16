@@ -23,7 +23,6 @@ Topics covered:
 from __future__ import annotations
 
 # Standard library imports:
-import json
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch

@@ -47,7 +47,7 @@ def extract_tools(actor_instance: Any) -> list[dict]:
 def _build_tool_spec(name: str, func: Callable) -> dict:
     try:
         hints = get_type_hints(func)
-    except Exception:
+    except Exception:  # noqa: BLE001
         hints = {}
 
     sig = inspect.signature(func)

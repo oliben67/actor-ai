@@ -28,8 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from fake_provider import ScriptedProvider
 
 # Local imports:
-from actor_ai import AIActor, Ledger, ModelRate, Rates
-from actor_ai import UsageSummary
+from actor_ai import AIActor, Ledger, ModelRate, Rates, UsageSummary
 
 # ── Module-level shared objects ────────────────────────────────────────────
 # Actor classes are defined at module level so their class attributes can
@@ -99,10 +98,11 @@ def main() -> None:
 
         print(f"  Total entries: {len(shared_ledger)}")
         for entry in shared_ledger.entries():
+            session_str = entry.session_id[:8] if entry.session_id else "N/A"
             print(
                 f"  [{entry.actor_name:8}]  model={entry.model!r:15}"
                 f"  in={entry.input_tokens:4}  out={entry.output_tokens:4}"
-                f"  session={entry.session_id[:8]}…"
+                f"  session={session_str}…"
             )
 
         # ── Usage aggregates ───────────────────────────────────────────
