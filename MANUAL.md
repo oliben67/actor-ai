@@ -257,6 +257,58 @@ proxy.instruct(io.BytesIO(b"Summarise this.")).get()            # BytesIO
 - Raises `RuntimeError` if `provider` is `None`.
 - Raises `TypeError` if `instruction` is not a str, path-like, or readable stream.
 
+The union of all accepted instruction forms is exported as the `InstructionInput` type alias for use in your own annotations:
+
+```python
+from actor_ai import InstructionInput
+
+def build_prompt() -> InstructionInput:
+    return Path("prompts/system.txt")
+```
+
+### 2.8 instruct_many()
+
+Run multiple instructions in order and collect the replies, with an optional evaluator over the full result set.
+
+```python
+replies: list[str] = proxy.instruct_many(
+    instructions,           # Iterable[InstructionInput]
+    evaluate=None,          # Callable[[list[tuple[str, str]]], T] | None
+    use_session=False,      # bool: share session across calls
+).get()
+```
+
+The evaluator (if provided) receives a `list[tuple[str, str]]` — *(resolved instruction text, reply)* pairs in collection order — and its return value replaces the default `list[str]`:
+
+```python
+# Batch replies, no evaluator
+replies = proxy.instruct_many(["Q1", "Q2", "Q3"]).get()
+
+# With evaluator — score the replies
+def score(pairs: list[tuple[str, str]]) -> dict:
+    return {i: len(reply.split()) for i, (_, reply) in enumerate(pairs)}
+
+scores = proxy.instruct_many(["Q1", "Q2"], evaluate=score).get()
+# → {0: 12, 1: 7}
+
+# Accept Path and stream inputs too
+from pathlib import Path
+import io
+
+replies = proxy.instruct_many([
+    "plain string",
+    Path("prompts/q2.txt"),
+    io.StringIO("summarise this"),
+]).get()
+```
+
+**Session mode:**
+
+| `use_session` | Behaviour |
+|---|---|
+| `False` (default) | Each call is independent — session not read or written. Use for batch processing and evaluation. |
+| `True` | All calls run in the shared session; instruction N sees replies 0…N-1 as context. Use for scripted dialogues. |
+
 ---
 
 ## 3. Session management
@@ -1134,7 +1186,8 @@ make_agent(
 
 ```python
 # Instructions
-instruct(instruction: str | Path | IO[str], history=None, use_session=True) -> str
+instruct(instruction: InstructionInput, history=None, use_session=True) -> str
+instruct_many(instructions: Iterable[InstructionInput], evaluate=None, *, use_session=False) -> list[str] | T
 
 # Long-term memory
 remember(key: str, value: str) -> None

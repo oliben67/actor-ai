@@ -699,6 +699,84 @@ class TestUsageTracking:
 
 
 # ---------------------------------------------------------------------------
+# instruct_many()
+# ---------------------------------------------------------------------------
+
+
+class TestInstructMany:
+    def test_returns_list_of_replies(self, actor_factory):
+        cls, _ = make_actor(replies=["r1", "r2", "r3"])
+        ref = actor_factory(cls)
+        replies = ref.proxy().instruct_many(["a", "b", "c"]).get()
+        assert replies == ["r1", "r2", "r3"]
+
+    def test_order_preserved(self, actor_factory):
+        cls, provider = make_actor(replies=["r1", "r2"])
+        ref = actor_factory(cls)
+        ref.proxy().instruct_many(["first", "second"]).get()
+        assert provider.calls[0]["messages"][-1]["content"] == "first"
+        assert provider.calls[1]["messages"][-1]["content"] == "second"
+
+    def test_empty_collection_returns_empty_list(self, actor_factory):
+        cls, _ = make_actor()
+        ref = actor_factory(cls)
+        assert ref.proxy().instruct_many([]).get() == []
+
+    def test_evaluate_receives_pairs(self, actor_factory):
+        cls, _ = make_actor(replies=["r1", "r2"])
+        ref = actor_factory(cls)
+        captured: list = []
+
+        def capture(pairs):
+            captured.extend(pairs)
+            return pairs
+
+        ref.proxy().instruct_many(["a", "b"], capture).get()
+        assert captured == [("a", "r1"), ("b", "r2")]
+
+    def test_evaluate_return_value_is_returned(self, actor_factory):
+        cls, _ = make_actor(replies=["r1"])
+        ref = actor_factory(cls)
+        result = ref.proxy().instruct_many(["q"], evaluate=lambda p: {"score": 1}).get()
+        assert result == {"score": 1}
+
+    def test_use_session_false_does_not_update_session(self, actor_factory):
+        cls, _ = make_actor(replies=["r1", "r2"])
+        ref = actor_factory(cls)
+        ref.proxy().instruct_many(["a", "b"], use_session=False).get()
+        assert ref.proxy().get_session().get() == []
+
+    def test_use_session_true_accumulates_session(self, actor_factory):
+        cls, _ = make_actor(replies=["r1", "r2"])
+        ref = actor_factory(cls)
+        ref.proxy().instruct_many(["a", "b"], use_session=True).get()
+        session = ref.proxy().get_session().get()
+        assert len(session) == 4
+
+    def test_path_input_resolved(self, actor_factory, tmp_path):
+        f = tmp_path / "q.txt"
+        f.write_text("from file", encoding="utf-8")
+        cls, provider = make_actor()
+        ref = actor_factory(cls)
+        ref.proxy().instruct_many([f]).get()
+        assert provider.calls[0]["messages"][-1]["content"] == "from file"
+
+    def test_stream_input_resolved(self, actor_factory):
+        cls, provider = make_actor()
+        ref = actor_factory(cls)
+        ref.proxy().instruct_many([io.StringIO("from stream")]).get()
+        assert provider.calls[0]["messages"][-1]["content"] == "from stream"
+
+    def test_evaluate_uses_resolved_text_not_original(self, actor_factory, tmp_path):
+        f = tmp_path / "q.txt"
+        f.write_text("file content", encoding="utf-8")
+        cls, _ = make_actor()
+        ref = actor_factory(cls)
+        pairs = ref.proxy().instruct_many([f], evaluate=lambda p: p).get()
+        assert pairs[0][0] == "file content"
+
+
+# ---------------------------------------------------------------------------
 # instruct() input types (Path and streams)
 # ---------------------------------------------------------------------------
 

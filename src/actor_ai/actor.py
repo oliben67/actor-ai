@@ -3,10 +3,10 @@ from __future__ import annotations
 
 # Standard library imports:
 import os
-from collections.abc import AsyncGenerator, Callable, Generator
+from collections.abc import AsyncGenerator, Callable, Generator, Iterable
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
-from typing import IO
+from typing import IO, Any, TypeVar, overload
 
 # Third party imports:
 import pykka
@@ -16,8 +16,12 @@ from .messages import Forget, Instruct, Remember
 from .providers import LLMProvider
 from .tools import extract_tools, tool
 
+type InstructionInput = str | os.PathLike[str] | IO[str]
 
-def _resolve_instruction(instruction: str | os.PathLike[str] | IO[str]) -> str:
+_EvalT = TypeVar("_EvalT")
+
+
+def _resolve_instruction(instruction: InstructionInput) -> str:
     """Resolve an instruction to a plain string.
 
     Accepts a str, any os.PathLike (e.g. pathlib.Path), or a readable stream.
@@ -197,6 +201,56 @@ class AIActor(pykka.ThreadingActor):
             self._trim_session()
 
         return reply
+
+    @overload
+    def instruct_many(
+        self,
+        instructions: Iterable[InstructionInput],
+        evaluate: None = ...,
+        *,
+        use_session: bool = ...,
+    ) -> list[str]: ...
+
+    @overload
+    def instruct_many(
+        self,
+        instructions: Iterable[InstructionInput],
+        evaluate: Callable[[list[tuple[str, str]]], _EvalT],
+        *,
+        use_session: bool = ...,
+    ) -> _EvalT: ...
+
+    def instruct_many(
+        self,
+        instructions: Iterable[InstructionInput],
+        evaluate: Callable[[list[tuple[str, str]]], Any] | None = None,
+        *,
+        use_session: bool = False,
+    ) -> list[str] | Any:
+        """Run multiple instructions and return the replies, optionally evaluated.
+
+        Each instruction is resolved (str / Path / stream → text) then sent to the
+        LLM in collection order.
+
+        Args:
+            instructions: Any iterable of ``InstructionInput`` values.
+            evaluate: Optional callable that receives a ``list[tuple[str, str]]``
+                of *(resolved instruction text, reply)* pairs in order and returns
+                an arbitrary result.  When ``None`` the raw ``list[str]`` of
+                replies is returned.
+            use_session: When ``False`` (default) each call is independent — the
+                actor session is neither read nor written.  When ``True`` all
+                instructions run in the shared session so each turn has the
+                context of the previous ones.
+
+        Returns:
+            ``list[str]`` when *evaluate* is ``None``; otherwise whatever
+            *evaluate* returns.
+        """
+        resolved = [_resolve_instruction(i) for i in instructions]
+        replies = [self.instruct(text, use_session=use_session) for text in resolved]
+        pairs = list(zip(resolved, replies))
+        return evaluate(pairs) if evaluate is not None else replies
 
     def remember(self, key: str, value: str) -> None:
         """Persist a named fact that will be included in every system prompt."""

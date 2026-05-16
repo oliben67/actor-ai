@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from .accounting import Ledger, LedgerEntry, ModelRate, MonitoringContext, Rates, UsageSummary
-from .actor import AIActor, make_agent
+from .actor import AIActor, InstructionInput, make_agent
 from .chorus import Chorus, ChorusType
 from .messages import Forget, Instruct, Remember
 from .providers import (
@@ -20,7 +20,6 @@ from .tools import tool
 from .workflow import Workflow, WorkflowState, WorkflowTransition
 
 __all__ = [
-    "GPT",
     "AIActor",
     "Chorus",
     "ChorusType",
@@ -29,8 +28,10 @@ __all__ = [
     "CopilotModel",
     "DeepSeek",
     "Forget",
+    "GPT",
     "Gemini",
     "Instruct",
+    "InstructionInput",
     "LLMProvider",
     "Ledger",
     "LedgerEntry",
