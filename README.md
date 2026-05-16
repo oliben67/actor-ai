@@ -2,7 +2,7 @@
 
 **Multi-provider AI agents built on [pykka](https://github.com/jodal/pykka).**
 
-`actor-ai` extends [pykka](https://github.com/jodal/pykka) — a Python actor-model framework created by [Stein Magnus Jodal](https://github.com/jodal) — so each agent runs in its own thread, processes messages safely from a FIFO queue, and exposes a clean proxy API. On top of that foundation, `actor-ai` adds natural-language instructions, tool calling, conversation sessions, long-term memory, token accounting, traffic monitoring, multi-agent Chorus coordination, and state-machine Workflow orchestration — all with a provider-agnostic API.
+`actor-ai` extends [pykka](https://github.com/jodal/pykka) — a Python actor-model framework created by [Stein Magnus Jodal](https://github.com/jodal) — so each agent runs in its own thread, processes messages safely from a FIFO queue, and exposes a clean proxy API. On top of that foundation, `actor-ai` adds natural-language instructions, tool calling, conversation sessions, long-term memory, token accounting, traffic monitoring, **shared cross-agent context** (`SharedContext`), multi-agent Chorus coordination, and state-machine Workflow orchestration — all with a provider-agnostic API.
 
 ## Installation
 
@@ -96,6 +96,43 @@ Valid models: `gpt-4o`, `gpt-4o-mini`, `o1`, `o1-mini`, `o3-mini`, `claude-sonne
 
 The token is resolved in order: `api_key` argument → `GITHUB_TOKEN` env var → `gh auth token` CLI → OS keyring (GitHub CLI / VS Code).
 
+## SharedContext
+
+`SharedContext` is the cross-cutting coordination layer that lets any number of `AIActor` instances share state without coupling their implementations. All operations are thread-safe — agents can read and write concurrently.
+
+```python
+from actor_ai import make_agent, SharedContext, Claude
+
+ctx = SharedContext()
+ctx.remember("project", "Apollo")   # visible to every agent on this context
+
+Analyst = make_agent("Analyst", "You are a data analyst.", Claude(), context=ctx)
+Writer  = make_agent("Writer",  "You write concise summaries.", Claude(), context=ctx)
+
+with Analyst.get_proxy() as a, Writer.get_proxy() as w:
+    analysis = a.instruct("Analyse the project setup.").get()
+    summary  = w.instruct("Summarise the analysis.").get()
+
+# Full interleaved transcript of every agent turn:
+for entry in ctx.get_log():
+    print(entry["agent"], entry["role"], entry["content"][:80])
+```
+
+**Memory tiers**
+
+| Tier | API | Scope | Cleared by |
+|---|---|---|---|
+| Long-term | `remember` / `forget` | All agents, all sessions | `forget()` only |
+| Working | `remember_working` / `forget_working` | All agents, current task | `clear_working_memory()` |
+| Conversation log | read-only via `get_log()` | Append-only across all agents | `clear_log()` |
+
+Key behaviours:
+
+- Facts written by any agent are immediately visible to all others.
+- Working memory is injected into every agent's system prompt automatically.
+- `clear_session()` does **not** clear shared working memory — call `clear_working_memory()` explicitly when a task boundary is reached.
+- Each agent still maintains its own private conversation history for its LLM calls; the shared context is the cross-cutting layer on top.
+
 ## Chorus
 
 `Chorus` groups named actors and lets you coordinate them at three levels.  Members can be `AIActor` instances, other `Chorus` instances, or any plain pykka actor that exposes an `instruct()` method.
@@ -171,6 +208,7 @@ wf.proxy().add_transition(WorkflowTransition("review", "approve", on_event="appr
 - **Multi-turn sessions** — rolling conversation history, configurable window (`max_history`)
 - **Long-term memory** — `remember(key, value)` / `forget(key)` facts injected into every system prompt
 - **Tool calling** — decorate methods with `@tool` to expose them to the LLM
+- **SharedContext** — thread-safe shared memory (long-term + working) and append-only conversation log across any number of agents; attach with `context=ctx` on `make_agent()` or as a class attribute
 - **Chorus** — group actors as a named team with `broadcast`, `pipeline`, `join`/`leave`, typed (`ChorusType`), nestable
 - **Workflow** — state-machine orchestration with guard and event transitions, parallel actor states, runtime modification, non-blocking `run_detached()`
 - **Accounting** — track token usage and cost per actor, model, and session (`Ledger`, `Rates`)
@@ -197,6 +235,7 @@ examples/
   13_workflow.py            — Workflow state machine: run, step, event, runtime modification
   14_workflow_parallel.py   — Parallel actor states and run_detached()
   15_make_agent.py          — make_agent() factory: simple agents, tools, sub-agents
+  16_shared_context.py      — SharedContext: shared memory, working memory, conversation log
 ```
 
 Run any example:
