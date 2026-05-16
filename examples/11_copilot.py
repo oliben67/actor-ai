@@ -110,30 +110,36 @@ def _section_token(monkeypatch_env: dict) -> None:
 
     # Priority 1: explicit api_key
     captured: dict = {}
-    with patch("actor_ai.providers.openai.subprocess.run") as mock_sub:
-        with patch("actor_ai.providers.openai.OpenAI") as mock_oai:
-            mock_oai.side_effect = lambda **kw: captured.update(kw) or MagicMock()
-            Copilot(api_key="ghp_explicit_override")
+    with (
+        patch("actor_ai.providers.openai.subprocess.run") as mock_sub,
+        patch("actor_ai.providers.openai.OpenAI") as mock_oai,
+    ):
+        mock_oai.side_effect = lambda **kw: captured.update(kw) or MagicMock()
+        Copilot(api_key="ghp_explicit_override")
     print(f"  1. explicit api_key : {captured.get('api_key')}")
     print(f"     gh CLI called     : {mock_sub.called}  (skipped — key provided)")
 
     # Priority 2: GITHUB_TOKEN env var
     os.environ["GITHUB_TOKEN"] = "ghp_from_env"
     captured2: dict = {}
-    with patch("actor_ai.providers.openai.subprocess.run") as mock_sub2:
-        with patch("actor_ai.providers.openai.OpenAI") as mock_oai:
-            mock_oai.side_effect = lambda **kw: captured2.update(kw) or MagicMock()
-            Copilot()
+    with (
+        patch("actor_ai.providers.openai.subprocess.run") as mock_sub2,
+        patch("actor_ai.providers.openai.OpenAI") as mock_oai,
+    ):
+        mock_oai.side_effect = lambda **kw: captured2.update(kw) or MagicMock()
+        Copilot()
     print(f"\n  2. GITHUB_TOKEN env : {captured2.get('api_key')}")
     print(f"     gh CLI called     : {mock_sub2.called}  (skipped — env var found)")
     del os.environ["GITHUB_TOKEN"]
 
     # Priority 3: gh auth token CLI
     captured3: dict = {}
-    with patch("actor_ai.providers.openai.subprocess.run", return_value=_gh_result):
-        with patch("actor_ai.providers.openai.OpenAI") as mock_oai:
-            mock_oai.side_effect = lambda **kw: captured3.update(kw) or MagicMock()
-            Copilot()
+    with (
+        patch("actor_ai.providers.openai.subprocess.run", return_value=_gh_result),
+        patch("actor_ai.providers.openai.OpenAI") as mock_oai,
+    ):
+        mock_oai.side_effect = lambda **kw: captured3.update(kw) or MagicMock()
+        Copilot()
     print(f"\n  3. gh auth token    : {captured3.get('api_key')} (from gh CLI)")
 
     # Fallback: nothing available
@@ -141,10 +147,12 @@ def _section_token(monkeypatch_env: dict) -> None:
     _fail.returncode = 1
     _fail.stdout = ""
     captured4: dict = {}
-    with patch("actor_ai.providers.openai.subprocess.run", return_value=_fail):
-        with patch("actor_ai.providers.openai.OpenAI") as mock_oai:
-            mock_oai.side_effect = lambda **kw: captured4.update(kw) or MagicMock()
-            Copilot()
+    with (
+        patch("actor_ai.providers.openai.subprocess.run", return_value=_fail),
+        patch("actor_ai.providers.openai.OpenAI") as mock_oai,
+    ):
+        mock_oai.side_effect = lambda **kw: captured4.update(kw) or MagicMock()
+        Copilot()
     print(f"\n  4. no token found   : api_key={captured4.get('api_key')!r} (OpenAI handles auth)")
 
     _ = call  # suppress unused import warning
@@ -196,7 +204,7 @@ def _section_models() -> None:
     print("\n  Instantiating each valid model (no errors expected):")
     for m in sorted(Copilot.MODELS):
         with patch("actor_ai.providers.openai.OpenAI"):
-            Copilot(m)
+            Copilot(m)  # type: ignore[arg-type]
         print(f"    Copilot({m!r}) ✓")
 
     # Invalid model raises ValueError immediately — before any network call
