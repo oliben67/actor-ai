@@ -33,11 +33,13 @@ from actor_ai import AIActor
 
 class Assistant(AIActor):
     system_prompt = "You are a helpful assistant. Answer concisely."
-    provider = ScriptedProvider([
-        "The capital of France is Paris.",
-        "The capital of Germany is Berlin.",
-        "The capital of Spain is Madrid.",
-    ])
+    provider = ScriptedProvider(
+        [
+            "The capital of France is Paris.",
+            "The capital of Germany is Berlin.",
+            "The capital of Spain is Madrid.",
+        ]
+    )
 
 
 def main() -> None:

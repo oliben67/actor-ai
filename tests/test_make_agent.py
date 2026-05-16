@@ -223,7 +223,12 @@ class TestMakeAgentSubAgents:
             calls.append(instruction)
             return "recorded"
 
-        SubCls = make_agent("Sub", "Record.", ToolCallingFakeProvider("record", {"instruction": "x"}, "done"), tools=[record])
+        SubCls = make_agent(
+            "Sub",
+            "Record.",
+            ToolCallingFakeProvider("record", {"instruction": "x"}, "done"),
+            tools=[record],
+        )
 
         provider = ToolCallingFakeProvider("helper", {"instruction": "task1"}, "final")
         cls = make_agent("Parent", "Use helper.", provider, sub_agents={"helper": SubCls})
