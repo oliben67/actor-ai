@@ -29,7 +29,7 @@ from fake_provider import ScriptedProvider
 
 # Local imports:
 from actor_ai import AIActor, Ledger, ModelRate, Rates
-from actor_ai._accounting import UsageSummary
+from actor_ai import UsageSummary
 
 # ── Module-level shared objects ────────────────────────────────────────────
 # Actor classes are defined at module level so their class attributes can
