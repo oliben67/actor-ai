@@ -140,9 +140,7 @@ class LiteLLM(LLMProvider):
                                 "prompt_tokens_details",
                                 "cached_tokens",
                             )
-                            or _usage_token_count(
-                                getattr(usage, "cache_read_input_tokens", None)
-                            ),
+                            or _usage_token_count(getattr(usage, "cache_read_input_tokens", None)),
                             cache_write_tokens=_usage_token_count(
                                 getattr(usage, "cache_creation_input_tokens", None)
                             ),

@@ -1254,6 +1254,7 @@ class TestCopilotSDKProvider:
 
     def test_run_sdk_non_usage_event_and_none_reply(self):
         """Non-AssistantUsageData events ignored (195->exit); None reply → return '' (231)."""
+        # Standard library imports:
         from types import SimpleNamespace as NS
 
         class FakeSession:
@@ -1309,6 +1310,7 @@ class TestCopilotSDKProvider:
 
 class TestCopilotClientConfig:
     def test_cli_url_returns_external_server_config(self):
+        # Third party imports:
         from copilot import ExternalServerConfig
 
         p = Copilot(use_sdk=True, cli_url="http://localhost:9999")
@@ -1316,6 +1318,7 @@ class TestCopilotClientConfig:
         assert isinstance(config, ExternalServerConfig)
 
     def test_api_key_returns_subprocess_config(self):
+        # Third party imports:
         from copilot import SubprocessConfig
 
         p = Copilot(use_sdk=True, api_key="ghp_sdk_key")
@@ -1323,6 +1326,7 @@ class TestCopilotClientConfig:
         assert isinstance(config, SubprocessConfig)
 
     def test_cli_path_returns_subprocess_config(self):
+        # Third party imports:
         from copilot import SubprocessConfig
 
         p = Copilot(use_sdk=True, cli_path="/opt/copilot/bin/copilot")
@@ -1342,6 +1346,7 @@ class TestCopilotClientConfig:
 
 class TestCopilotUsageTokenCount:
     def _fn(self):
+        # Local imports:
         from actor_ai.providers.copilot import _usage_token_count
 
         return _usage_token_count
@@ -1362,28 +1367,44 @@ class TestCopilotUsageTokenCount:
 
 
 class TestOpenAIUsageDetailTokenCount:
+    # Local imports:
     from actor_ai.providers.openai import _usage_detail_token_count as _fn
 
     def test_dict_details_returns_value(self):
-        from actor_ai.providers.openai import _usage_detail_token_count
+        # Standard library imports:
         from types import SimpleNamespace
+
+        # Local imports:
+        from actor_ai.providers.openai import _usage_detail_token_count
 
         usage = SimpleNamespace(completion_tokens_details={"reasoning_tokens": 7})
-        assert _usage_detail_token_count(usage, "completion_tokens_details", "reasoning_tokens") == 7
+        assert (
+            _usage_detail_token_count(usage, "completion_tokens_details", "reasoning_tokens") == 7
+        )
 
     def test_dict_details_none_value_returns_zero(self):
-        from actor_ai.providers.openai import _usage_detail_token_count
+        # Standard library imports:
         from types import SimpleNamespace
+
+        # Local imports:
+        from actor_ai.providers.openai import _usage_detail_token_count
 
         usage = SimpleNamespace(completion_tokens_details={"reasoning_tokens": None})
-        assert _usage_detail_token_count(usage, "completion_tokens_details", "reasoning_tokens") == 0
+        assert (
+            _usage_detail_token_count(usage, "completion_tokens_details", "reasoning_tokens") == 0
+        )
 
     def test_dict_details_missing_key_returns_zero(self):
-        from actor_ai.providers.openai import _usage_detail_token_count
+        # Standard library imports:
         from types import SimpleNamespace
 
+        # Local imports:
+        from actor_ai.providers.openai import _usage_detail_token_count
+
         usage = SimpleNamespace(completion_tokens_details={})
-        assert _usage_detail_token_count(usage, "completion_tokens_details", "reasoning_tokens") == 0
+        assert (
+            _usage_detail_token_count(usage, "completion_tokens_details", "reasoning_tokens") == 0
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1393,20 +1414,22 @@ class TestOpenAIUsageDetailTokenCount:
 
 class TestModuleGetattr:
     def test_actor_ai_getattr_unknown_raises(self):
+        # Local imports:
         import actor_ai
 
         with pytest.raises(AttributeError, match="actor_ai"):
             actor_ai.__getattr__("_NonExistentXXX")
 
     def test_providers_init_getattr_litellm_returns_class(self):
+        # Local imports:
         import actor_ai.providers as pkg
-
         from actor_ai.providers.litellm import LiteLLM
 
         cls = pkg.__getattr__("LiteLLM")
         assert cls is LiteLLM
 
     def test_providers_init_getattr_unknown_raises(self):
+        # Local imports:
         import actor_ai.providers as pkg
 
         with pytest.raises(AttributeError, match="actor_ai.providers"):
