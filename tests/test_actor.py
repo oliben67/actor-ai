@@ -10,7 +10,7 @@ import io
 import pytest
 
 # Local imports:
-from actor_ai import AIActor, Forget, Instruct, Remember, tool
+from actor_ai import AIActor, Forget, Instruct, Remember, UsageSummary, tool
 from tests.conftest import FakeProvider, ToolCallingFakeProvider
 
 # ---------------------------------------------------------------------------
@@ -661,6 +661,29 @@ class TestUsageTracking:
         usage = ref.proxy().get_usage().get()
         assert usage.input_tokens > 0
         assert usage.output_tokens > 0
+
+    def test_usage_snapshot_includes_extended_token_fields(self, actor_factory):
+        provider = FakeProvider(
+            ["reply"],
+            usage=UsageSummary(
+                input_tokens=10,
+                output_tokens=5,
+                reasoning_tokens=3,
+                cache_read_tokens=2,
+                cache_write_tokens=1,
+            ),
+        )
+        cls = type(
+            "ExtendedUsageActor",
+            (AIActor,),
+            {"provider": provider, "system_prompt": "Test system"},
+        )
+        ref = actor_factory(cls)
+        ref.proxy().instruct("hello").get()
+        usage = ref.proxy().get_usage().get()
+        assert usage.reasoning_tokens == 3
+        assert usage.cache_read_tokens == 2
+        assert usage.cache_write_tokens == 1
 
     def test_usage_accumulates_across_calls(self, actor_factory):
         cls, _ = make_actor(replies=["r1", "r2"])

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 # Standard library imports:
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -14,9 +15,9 @@ import pytest
 # Local imports:
 from actor_ai.providers.anthropic import Claude
 from actor_ai.providers.base import LLMProvider
+from actor_ai.providers.copilot import Copilot, Copilot_SDK
 from actor_ai.providers.openai import (
     GPT,
-    Copilot,
     DeepSeek,
     Gemini,
     Mistral,
@@ -803,7 +804,7 @@ class TestCopilotProvider:
 
     def test_copilot_model_literal_importable(self):
         # Local imports:
-        from actor_ai import CopilotModel as CM
+        from actor_ai.providers.copilot import CopilotModel as CM
 
         assert CM is not None
 
@@ -1001,6 +1002,412 @@ class TestCopilotProvider:
 
     def test_copilot_importable_from_actor_ai(self):
         # Local imports:
-        from actor_ai import Copilot as CopilotPublic
+        from actor_ai.providers.copilot import Copilot as CopilotPublic
 
         assert CopilotPublic is Copilot
+
+
+class TestCopilotSDKProvider:
+    def test_default_model(self):
+        p = Copilot(use_sdk=True)
+        assert p.model == "gpt-4o"
+        assert p.use_sdk is True
+
+    def test_copilot_sdk_alias_enables_sdk_mode(self):
+        p = Copilot_SDK()
+        assert p.model == "gpt-4o"
+        assert p.use_sdk is True
+
+    def test_invalid_model_raises_value_error(self):
+        with pytest.raises(ValueError, match="Unsupported Copilot model"):
+            Copilot("bad-model", use_sdk=True)
+
+    def test_run_uses_sdk_session_contract(self):
+        # Third party imports:
+        from copilot.generated.session_events import AssistantMessageData
+
+        instances = []
+
+        class FakeSession:
+            prompt = ""
+            timeout = 0.0
+            handlers = []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                return None
+
+            def on(self, handler):
+                self.handlers.append(handler)
+
+                def unsubscribe():
+                    self.handlers.remove(handler)
+
+                return unsubscribe
+
+            async def send_and_wait(self, prompt, *, timeout):
+                self.prompt = prompt
+                self.timeout = timeout
+                return SimpleNamespace(
+                    data=AssistantMessageData(content="sdk ok", message_id="msg_1")
+                )
+
+        class FakeClient:
+            def __init__(self, config=None):
+                self.config = config
+                self.session = FakeSession()
+                self.create_kwargs = {}
+                instances.append(self)
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                return None
+
+            async def create_session(self, **kwargs):
+                self.create_kwargs = kwargs
+                return self.session
+
+        spec = {
+            "name": "double",
+            "description": "Double a number",
+            "input_schema": {"type": "object", "properties": {"n": {"type": "integer"}}},
+        }
+
+        with patch("actor_ai.providers.copilot._resolve_github_token", return_value=None):
+            with patch("actor_ai.providers.copilot.CopilotClient", FakeClient):
+                provider = Copilot("claude-sonnet-4-5", use_sdk=True, timeout=12.5)
+                result = provider.run(
+                    "be brief",
+                    [{"role": "user", "content": "double 5"}],
+                    [spec],
+                    lambda name, args: args["n"] * 2,
+                    100,
+                )
+
+        assert result == "sdk ok"
+        client = instances[0]
+        assert client.config is None
+        assert client.session.prompt == "user: double 5"
+        assert client.session.timeout == 12.5
+        assert client.create_kwargs["model"] == "claude-sonnet-4-5"
+        assert client.create_kwargs["system_message"] == {"mode": "replace", "content": "be brief"}
+        assert client.create_kwargs["on_permission_request"] is not None
+        assert len(client.create_kwargs["tools"]) == 1
+        sdk_tool = client.create_kwargs["tools"][0]
+        assert sdk_tool.name == "double"
+        assert sdk_tool.description == "Double a number"
+        assert sdk_tool.parameters == spec["input_schema"]
+        assert sdk_tool.skip_permission is True
+        assert client.session.handlers == []
+
+    def test_run_reports_sdk_assistant_usage(self):
+        # Third party imports:
+        from copilot.generated.session_events import AssistantMessageData, AssistantUsageData
+
+        instances = []
+
+        class FakeSession:
+            def __init__(self):
+                self.handlers = []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                return None
+
+            def on(self, handler):
+                self.handlers.append(handler)
+
+                def unsubscribe():
+                    self.handlers.remove(handler)
+
+                return unsubscribe
+
+            async def send_and_wait(self, prompt, *, timeout):
+                del prompt, timeout
+                for handler in list(self.handlers):
+                    handler(
+                        SimpleNamespace(
+                            data=AssistantUsageData(
+                                model="claude-sonnet-4-5",
+                                input_tokens=42.0,
+                                output_tokens=11.0,
+                                reasoning_tokens=7.0,
+                                cache_read_tokens=5.0,
+                                cache_write_tokens=4.0,
+                            )
+                        )
+                    )
+                    handler(
+                        SimpleNamespace(
+                            data=AssistantUsageData(
+                                model="claude-sonnet-4-5",
+                                input_tokens=3.0,
+                                output_tokens=2.0,
+                                reasoning_tokens=1.0,
+                                cache_read_tokens=2.0,
+                                cache_write_tokens=1.0,
+                            )
+                        )
+                    )
+                return SimpleNamespace(
+                    data=AssistantMessageData(content="sdk ok", message_id="msg_1")
+                )
+
+        class FakeClient:
+            def __init__(self, config=None):
+                self.config = config
+                self.session = FakeSession()
+                instances.append(self)
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                return None
+
+            async def create_session(self, **kwargs):
+                del kwargs
+                return self.session
+
+        received = []
+        with patch("actor_ai.providers.copilot.CopilotClient", FakeClient):
+            provider = Copilot("claude-sonnet-4-5", use_sdk=True)
+            result = provider.run(
+                "be brief",
+                [{"role": "user", "content": "hello"}],
+                [],
+                lambda name, args: None,
+                100,
+                on_usage=received.append,
+            )
+
+        assert result == "sdk ok"
+        assert len(received) == 1
+        assert received[0].input_tokens == 45
+        assert received[0].output_tokens == 13
+        assert received[0].reasoning_tokens == 8
+        assert received[0].cache_read_tokens == 7
+        assert received[0].cache_write_tokens == 5
+        assert instances[0].session.handlers == []
+
+    def test_tool_handler_dispatches_arguments(self):
+        # Third party imports:
+        from copilot.tools import ToolInvocation
+
+        # Local imports:
+        from actor_ai.providers.copilot import _to_copilot_tool
+
+        dispatcher = MagicMock(return_value=10)
+        tool = _to_copilot_tool(
+            {"name": "double", "input_schema": {"type": "object"}},
+            dispatcher,
+        )
+
+        result = asyncio.run(
+            tool.handler(
+                ToolInvocation(
+                    session_id="s1",
+                    tool_call_id="tc1",
+                    tool_name="double",
+                    arguments={"n": 5},
+                )
+            )
+        )
+
+        dispatcher.assert_called_once_with("double", {"n": 5})
+        assert result.text_result_for_llm == "10"
+        assert result.result_type == "success"
+
+    def test_tool_handler_awaitable_dispatcher(self):
+        """Tool handler must await dispatcher results that are coroutines (line 306)."""
+        # Third party imports:
+        from copilot.tools import ToolInvocation
+
+        # Local imports:
+        from actor_ai.providers.copilot import _to_copilot_tool
+
+        async def async_result():
+            return 99
+
+        tool = _to_copilot_tool(
+            {"name": "compute", "input_schema": {"type": "object"}},
+            lambda name, args: async_result(),
+        )
+
+        result = asyncio.run(
+            tool.handler(
+                ToolInvocation(
+                    session_id="s1",
+                    tool_call_id="tc1",
+                    tool_name="compute",
+                    arguments={"n": 5},
+                )
+            )
+        )
+        assert result.text_result_for_llm == "99"
+
+    def test_run_sdk_non_usage_event_and_none_reply(self):
+        """Non-AssistantUsageData events ignored (195->exit); None reply → return '' (231)."""
+        from types import SimpleNamespace as NS
+
+        class FakeSession:
+            def __init__(self):
+                self.handlers = []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return None
+
+            def on(self, handler):
+                self.handlers.append(handler)
+
+                def unsubscribe():
+                    self.handlers.remove(handler)
+
+                return unsubscribe
+
+            async def send_and_wait(self, prompt, *, timeout):
+                for h in list(self.handlers):
+                    h(NS(data=NS()))  # not AssistantUsageData → hits 195->exit
+                return None  # → hits line 231: return ""
+
+        class FakeClient:
+            def __init__(self, config=None):
+                self.session = FakeSession()
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return None
+
+            async def create_session(self, **kwargs):
+                return self.session
+
+        received = []
+        with patch("actor_ai.providers.copilot.CopilotClient", FakeClient):
+            result = Copilot("gpt-4o", use_sdk=True).run(
+                "sys", [], [], lambda n, a: None, 100, on_usage=received.append
+            )
+
+        assert result == ""
+        assert received == []
+
+
+# ---------------------------------------------------------------------------
+# Copilot _client_config
+# ---------------------------------------------------------------------------
+
+
+class TestCopilotClientConfig:
+    def test_cli_url_returns_external_server_config(self):
+        from copilot import ExternalServerConfig
+
+        p = Copilot(use_sdk=True, cli_url="http://localhost:9999")
+        config = p._client_config()
+        assert isinstance(config, ExternalServerConfig)
+
+    def test_api_key_returns_subprocess_config(self):
+        from copilot import SubprocessConfig
+
+        p = Copilot(use_sdk=True, api_key="ghp_sdk_key")
+        config = p._client_config()
+        assert isinstance(config, SubprocessConfig)
+
+    def test_cli_path_returns_subprocess_config(self):
+        from copilot import SubprocessConfig
+
+        p = Copilot(use_sdk=True, cli_path="/opt/copilot/bin/copilot")
+        config = p._client_config()
+        assert isinstance(config, SubprocessConfig)
+
+    def test_nothing_set_returns_none(self):
+        with patch("actor_ai.providers.copilot._resolve_github_token", return_value=None):
+            p = Copilot(use_sdk=True)
+        assert p._client_config() is None
+
+
+# ---------------------------------------------------------------------------
+# Copilot _usage_token_count
+# ---------------------------------------------------------------------------
+
+
+class TestCopilotUsageTokenCount:
+    def _fn(self):
+        from actor_ai.providers.copilot import _usage_token_count
+
+        return _usage_token_count
+
+    def test_none_returns_zero(self):
+        assert self._fn()(None) == 0
+
+    def test_bool_returns_zero(self):
+        assert self._fn()(True) == 0
+
+    def test_string_returns_zero(self):
+        assert self._fn()("123") == 0
+
+
+# ---------------------------------------------------------------------------
+# OpenAI _usage_detail_token_count
+# ---------------------------------------------------------------------------
+
+
+class TestOpenAIUsageDetailTokenCount:
+    from actor_ai.providers.openai import _usage_detail_token_count as _fn
+
+    def test_dict_details_returns_value(self):
+        from actor_ai.providers.openai import _usage_detail_token_count
+        from types import SimpleNamespace
+
+        usage = SimpleNamespace(completion_tokens_details={"reasoning_tokens": 7})
+        assert _usage_detail_token_count(usage, "completion_tokens_details", "reasoning_tokens") == 7
+
+    def test_dict_details_none_value_returns_zero(self):
+        from actor_ai.providers.openai import _usage_detail_token_count
+        from types import SimpleNamespace
+
+        usage = SimpleNamespace(completion_tokens_details={"reasoning_tokens": None})
+        assert _usage_detail_token_count(usage, "completion_tokens_details", "reasoning_tokens") == 0
+
+    def test_dict_details_missing_key_returns_zero(self):
+        from actor_ai.providers.openai import _usage_detail_token_count
+        from types import SimpleNamespace
+
+        usage = SimpleNamespace(completion_tokens_details={})
+        assert _usage_detail_token_count(usage, "completion_tokens_details", "reasoning_tokens") == 0
+
+
+# ---------------------------------------------------------------------------
+# Module-level __getattr__ (lazy LiteLLM / AttributeError)
+# ---------------------------------------------------------------------------
+
+
+class TestModuleGetattr:
+    def test_actor_ai_getattr_unknown_raises(self):
+        import actor_ai
+
+        with pytest.raises(AttributeError, match="actor_ai"):
+            actor_ai.__getattr__("_NonExistentXXX")
+
+    def test_providers_init_getattr_litellm_returns_class(self):
+        import actor_ai.providers as pkg
+
+        from actor_ai.providers.litellm import LiteLLM
+
+        cls = pkg.__getattr__("LiteLLM")
+        assert cls is LiteLLM
+
+    def test_providers_init_getattr_unknown_raises(self):
+        import actor_ai.providers as pkg
+
+        with pytest.raises(AttributeError, match="actor_ai.providers"):
+            pkg.__getattr__("_NonExistentXXX")

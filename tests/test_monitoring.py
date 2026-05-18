@@ -191,7 +191,13 @@ class TestLiteLLMProvider:
 
     def test_on_usage_callback_called(self):
         p = self._provider()
-        resp = _make_litellm_response("hi")
+        usage = MagicMock()
+        usage.prompt_tokens = 10
+        usage.completion_tokens = 5
+        usage.prompt_tokens_details = {"cached_tokens": 4}
+        usage.completion_tokens_details = {"reasoning_tokens": 3}
+        usage.cache_creation_input_tokens = 2
+        resp = _make_litellm_response("hi", usage=usage)
         received: list[UsageSummary] = []
         with patch("litellm.completion", return_value=resp):
             p.run("s", [], [], lambda n, a: None, 100, on_usage=received.append)
@@ -199,6 +205,9 @@ class TestLiteLLMProvider:
         assert len(received) == 1
         assert received[0].input_tokens == 10
         assert received[0].output_tokens == 5
+        assert received[0].reasoning_tokens == 3
+        assert received[0].cache_read_tokens == 4
+        assert received[0].cache_write_tokens == 2
 
     def test_on_usage_none_skipped(self):
         p = self._provider()
@@ -341,6 +350,31 @@ class TestLiteLLMProvider:
         assert "timeout" not in kw
         assert "num_retries" not in kw
         assert "api_key" not in kw
+
+    def test_choices_none_returns_empty(self):
+        p = self._provider()
+        resp = MagicMock()
+        resp.choices = None
+        resp.usage = None
+        with patch("litellm.completion", return_value=resp):
+            result = p.run("s", [], [], lambda n, a: None, 100)
+        assert result == ""
+
+    def test_usage_detail_none_returns_zero(self):
+        p = self._provider()
+        usage = MagicMock()
+        usage.prompt_tokens = 10
+        usage.completion_tokens = 5
+        usage.completion_tokens_details = None
+        usage.prompt_tokens_details = None
+        usage.cache_read_input_tokens = None
+        usage.cache_creation_input_tokens = None
+        resp = _make_litellm_response("ok", usage=usage)
+        received: list[UsageSummary] = []
+        with patch("litellm.completion", return_value=resp):
+            p.run("s", [], [], lambda n, a: None, 100, on_usage=received.append)
+        assert received[0].reasoning_tokens == 0
+        assert received[0].cache_write_tokens == 0
 
 
 # ---------------------------------------------------------------------------

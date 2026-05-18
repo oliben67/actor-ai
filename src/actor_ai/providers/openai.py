@@ -6,7 +6,6 @@ import json
 import os
 import subprocess
 from collections.abc import Callable
-from typing import Literal
 
 # Third party imports:
 from openai import OpenAI
@@ -117,6 +116,16 @@ class _OpenAICompatible(LLMProvider):
                     UsageSummary(
                         input_tokens=response.usage.prompt_tokens or 0,
                         output_tokens=response.usage.completion_tokens or 0,
+                        reasoning_tokens=_usage_detail_token_count(
+                            response.usage,
+                            "completion_tokens_details",
+                            "reasoning_tokens",
+                        ),
+                        cache_read_tokens=_usage_detail_token_count(
+                            response.usage,
+                            "prompt_tokens_details",
+                            "cached_tokens",
+                        ),
                     )
                 )
 
@@ -152,6 +161,19 @@ def _to_openai_tool(spec: dict) -> dict:
             "parameters": spec["input_schema"],
         },
     }
+
+
+def _usage_detail_token_count(usage: object, detail_name: str, token_name: str) -> int:
+    details = getattr(usage, detail_name, None)
+    if details is None:
+        return 0
+    if isinstance(details, dict):
+        value = details.get(token_name)
+    else:
+        value = getattr(details, token_name, None)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return int(value)
+    return 0
 
 
 class GPT(_OpenAICompatible):
@@ -407,122 +429,3 @@ def _resolve_github_token(explicit_key: str | None) -> str | None:
     except FileNotFoundError, subprocess.TimeoutExpired, OSError:
         pass
     return _token_from_keyring()
-
-
-# Literal type for IDE autocomplete — keep in sync with Copilot.MODELS below.
-CopilotModel = Literal[
-    "gpt-4o",
-    "gpt-4o-mini",
-    "o1",
-    "o1-mini",
-    "o3-mini",
-    "claude-sonnet-4-5",
-    "gemini-2.0-flash",
-]
-
-
-class Copilot(_OpenAICompatible):
-    """GitHub Copilot provider via its OpenAI-compatible endpoint.
-
-    Reads ``GITHUB_TOKEN`` from the environment by default.  Requires a
-    GitHub account with an active Copilot subscription (Individual, Business,
-    or Enterprise).
-
-    Passing an unsupported model string raises ``ValueError`` immediately at
-    construction time so the mistake is caught before any network call is made.
-    Use ``Copilot.MODELS`` to inspect the full set of valid model strings, or
-    rely on the ``CopilotModel`` ``Literal`` type for IDE autocompletion.
-
-    Supported models (as of mid-2025)
-    ----------------------------------
-    * ``gpt-4o`` (default)
-    * ``gpt-4o-mini``
-    * ``o1``, ``o1-mini``, ``o3-mini``
-    * ``claude-sonnet-4-5``
-    * ``gemini-2.0-flash``
-
-    The ``Copilot-Integration-Id`` header is sent automatically to identify
-    the integration to GitHub's backend.
-
-    Configuration parameters
-    ------------------------
-    model : CopilotModel
-        One of the supported Copilot model strings (see ``Copilot.MODELS``).
-    api_key : str, optional
-        GitHub token.  Resolution order: explicit argument →
-        ``GITHUB_TOKEN`` environment variable → ``gh auth token`` CLI
-        (works when the GitHub CLI is authenticated).
-    temperature : float, optional
-        Sampling temperature.
-    top_p : float, optional
-        Nucleus-sampling probability mass.
-    timeout : float, optional
-        HTTP request timeout in seconds.
-    stop : list[str] | str, optional
-        Sequences that stop generation.
-    seed : int, optional
-        Random seed for deterministic sampling (best-effort).
-
-    Example::
-
-        # IDE shows valid model choices via CopilotModel Literal
-        class MyActor(AIActor):
-            provider = Copilot()                       # gpt-4o (default)
-            provider = Copilot("claude-sonnet-4-5")    # Claude via Copilot
-            provider = Copilot("gemini-2.0-flash",
-                               temperature=0.2)
-
-        # Inspect valid models at runtime
-        print(Copilot.MODELS)
-    """
-
-    MODELS: frozenset[str] = frozenset(
-        {
-            "gpt-4o",
-            "gpt-4o-mini",
-            "o1",
-            "o1-mini",
-            "o3-mini",
-            "claude-sonnet-4-5",
-            "gemini-2.0-flash",
-        }
-    )
-
-    _BASE_URL = "https://api.githubcopilot.com"
-    _INTEGRATION_HEADER = {"Copilot-Integration-Id": "vscode-chat"}  # noqa: RUF012
-
-    def __init__(
-        self,
-        model: CopilotModel = "gpt-4o",
-        *,
-        api_key: str | None = None,
-        temperature: float | None = None,
-        top_p: float | None = None,
-        timeout: float | None = None,
-        stop: list[str] | str | None = None,
-        seed: int | None = None,
-    ) -> None:
-        if model not in self.MODELS:
-            valid = ", ".join(sorted(self.MODELS))
-            raise ValueError(f"Unsupported Copilot model {model!r}. Valid models: {valid}")
-        resolved = _resolve_github_token(api_key)
-        if resolved is None:
-            raise ValueError(
-                "No GitHub token found for Copilot. Supply one via:\n"
-                "  - api_key='ghp_...' constructor argument\n"
-                "  - GITHUB_TOKEN environment variable\n"
-                "  - gh auth login  (GitHub CLI)\n"
-                "  - VS Code GitHub Copilot extension (token read automatically from OS keyring)"
-            )
-        super().__init__(
-            model=model,
-            api_key=resolved,
-            api_key_env="GITHUB_TOKEN",
-            base_url=self._BASE_URL,
-            temperature=temperature,
-            top_p=top_p,
-            timeout=timeout,
-            stop=stop,
-            seed=seed,
-            default_headers=self._INTEGRATION_HEADER,
-        )

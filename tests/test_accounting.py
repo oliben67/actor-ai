@@ -25,10 +25,18 @@ class TestUsageSummary:
         u = UsageSummary()
         assert u.input_tokens == 0
         assert u.output_tokens == 0
+        assert u.reasoning_tokens == 0
+        assert u.cache_read_tokens == 0
+        assert u.cache_write_tokens == 0
+        assert u.cache_tokens == 0
 
     def test_total_tokens_sum(self):
-        u = UsageSummary(input_tokens=100, output_tokens=50)
-        assert u.total_tokens == 150
+        u = UsageSummary(input_tokens=100, output_tokens=50, reasoning_tokens=25)
+        assert u.total_tokens == 175
+
+    def test_cache_tokens_sum(self):
+        u = UsageSummary(cache_read_tokens=12, cache_write_tokens=8)
+        assert u.cache_tokens == 20
 
     def test_total_tokens_zero(self):
         assert UsageSummary().total_tokens == 0
@@ -39,6 +47,14 @@ class TestUsageSummary:
         c = a + b
         assert c.input_tokens == 30
         assert c.output_tokens == 20
+
+    def test_add_extended_token_fields(self):
+        a = UsageSummary(10, 5, reasoning_tokens=2, cache_read_tokens=3, cache_write_tokens=4)
+        b = UsageSummary(20, 15, reasoning_tokens=6, cache_read_tokens=7, cache_write_tokens=8)
+        c = a + b
+        assert c.reasoning_tokens == 8
+        assert c.cache_read_tokens == 10
+        assert c.cache_write_tokens == 12
 
     def test_add_does_not_mutate_operands(self):
         a = UsageSummary(10, 5)
@@ -179,6 +195,23 @@ class TestLedger:
         ledger.record("actor_a", "gpt-4o", 100, 50, session_id="s1")
         assert len(ledger) == 1
 
+    def test_record_adds_extended_token_fields(self):
+        ledger = Ledger()
+        ledger.record(
+            "actor_a",
+            "gpt-4o",
+            100,
+            50,
+            session_id="s1",
+            reasoning_tokens=25,
+            cache_read_tokens=10,
+            cache_write_tokens=5,
+        )
+        entry = ledger.entries()[0]
+        assert entry.reasoning_tokens == 25
+        assert entry.cache_read_tokens == 10
+        assert entry.cache_write_tokens == 5
+
     def test_entries_returns_copy(self):
         ledger = Ledger()
         ledger.record("a", "m", 10, 5)
@@ -200,10 +233,12 @@ class TestLedger:
 
     def test_total_usage_single_entry(self):
         ledger = Ledger()
-        ledger.record("a", "m", 100, 50)
+        ledger.record("a", "m", 100, 50, reasoning_tokens=25, cache_read_tokens=10)
         u = ledger.total_usage()
         assert u.input_tokens == 100
         assert u.output_tokens == 50
+        assert u.reasoning_tokens == 25
+        assert u.cache_read_tokens == 10
 
     def test_total_usage_multiple_entries(self):
         ledger = Ledger()
@@ -319,6 +354,10 @@ class TestLedger:
         assert s["entries"] == 1
         assert s["input_tokens"] == 100
         assert s["output_tokens"] == 50
+        assert s["reasoning_tokens"] == 0
+        assert s["cache_read_tokens"] == 0
+        assert s["cache_write_tokens"] == 0
+        assert s["cache_tokens"] == 0
         assert s["total_tokens"] == 150
         assert "total_cost_usd" not in s
 
@@ -337,8 +376,23 @@ class TestLedger:
         assert "1" in repr(ledger)
 
     def test_ledger_entry_usage_property(self):
-        entry = LedgerEntry("a", "m", 100, 50, datetime.now(UTC))
-        assert entry.usage == UsageSummary(100, 50)
+        entry = LedgerEntry(
+            "a",
+            "m",
+            100,
+            50,
+            datetime.now(UTC),
+            reasoning_tokens=25,
+            cache_read_tokens=10,
+            cache_write_tokens=5,
+        )
+        assert entry.usage == UsageSummary(
+            input_tokens=100,
+            output_tokens=50,
+            reasoning_tokens=25,
+            cache_read_tokens=10,
+            cache_write_tokens=5,
+        )
 
     def test_thread_safety(self):
         """Multiple threads can record simultaneously without losing entries."""
@@ -387,7 +441,13 @@ class TestNewSessionId:
 class TestActorAccounting:
     def test_ledger_receives_entry_after_instruct(self, actor_factory):
         ledger = Ledger()
-        usage = UsageSummary(input_tokens=100, output_tokens=50)
+        usage = UsageSummary(
+            input_tokens=100,
+            output_tokens=50,
+            reasoning_tokens=25,
+            cache_read_tokens=10,
+            cache_write_tokens=5,
+        )
         provider = FakeProvider(["reply"], usage=usage)
 
         class Actor(AIActor):
@@ -403,6 +463,9 @@ class TestActorAccounting:
         assert entry.actor_name == "Actor"
         assert entry.input_tokens == 100
         assert entry.output_tokens == 50
+        assert entry.reasoning_tokens == 25
+        assert entry.cache_read_tokens == 10
+        assert entry.cache_write_tokens == 5
 
     def test_actor_name_used_in_entry(self, actor_factory):
         ledger = Ledger()
@@ -578,7 +641,12 @@ class TestProviderUsageCallback:
         with patch("actor_ai.providers.anthropic.Anthropic"):
             provider = Claude()
 
-        usage_obj = SimpleNamespace(input_tokens=120, output_tokens=60)
+        usage_obj = SimpleNamespace(
+            input_tokens=120,
+            output_tokens=60,
+            cache_read_input_tokens=12,
+            cache_creation_input_tokens=8,
+        )
         text_block = SimpleNamespace(text="done")
         response = SimpleNamespace(stop_reason="end_turn", content=[text_block], usage=usage_obj)
         provider._client = MagicMock()
@@ -590,6 +658,8 @@ class TestProviderUsageCallback:
         assert len(received) == 1
         assert received[0].input_tokens == 120
         assert received[0].output_tokens == 60
+        assert received[0].cache_read_tokens == 12
+        assert received[0].cache_write_tokens == 8
 
     def test_claude_no_callback_when_no_usage_attr(self):
         # Standard library imports:
@@ -622,7 +692,12 @@ class TestProviderUsageCallback:
         with patch("actor_ai.providers.openai.OpenAI"):
             provider = GPT()
 
-        usage_obj = SimpleNamespace(prompt_tokens=80, completion_tokens=40)
+        usage_obj = SimpleNamespace(
+            prompt_tokens=80,
+            completion_tokens=40,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=9),
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=7),
+        )
         choice = SimpleNamespace(
             finish_reason="stop",
             message=SimpleNamespace(content="done", tool_calls=[]),
@@ -637,6 +712,8 @@ class TestProviderUsageCallback:
         assert len(received) == 1
         assert received[0].input_tokens == 80
         assert received[0].output_tokens == 40
+        assert received[0].reasoning_tokens == 7
+        assert received[0].cache_read_tokens == 9
 
     def test_gpt_no_callback_when_usage_is_none(self):
         # Standard library imports:

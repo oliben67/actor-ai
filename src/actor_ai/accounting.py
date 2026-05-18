@@ -35,15 +35,25 @@ class UsageSummary:
 
     input_tokens: int = 0
     output_tokens: int = 0
+    reasoning_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
 
     @property
     def total_tokens(self) -> int:
-        return self.input_tokens + self.output_tokens
+        return self.input_tokens + self.output_tokens + self.reasoning_tokens
+
+    @property
+    def cache_tokens(self) -> int:
+        return self.cache_read_tokens + self.cache_write_tokens
 
     def __add__(self, other: UsageSummary) -> UsageSummary:
         return UsageSummary(
             self.input_tokens + other.input_tokens,
             self.output_tokens + other.output_tokens,
+            self.reasoning_tokens + other.reasoning_tokens,
+            self.cache_read_tokens + other.cache_read_tokens,
+            self.cache_write_tokens + other.cache_write_tokens,
         )
 
     def __iadd__(self, other: UsageSummary) -> Self:
@@ -65,10 +75,19 @@ class LedgerEntry:
     output_tokens: int
     timestamp: datetime
     session_id: str | None = None
+    reasoning_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
 
     @property
     def usage(self) -> UsageSummary:
-        return UsageSummary(self.input_tokens, self.output_tokens)
+        return UsageSummary(
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            reasoning_tokens=self.reasoning_tokens,
+            cache_read_tokens=self.cache_read_tokens,
+            cache_write_tokens=self.cache_write_tokens,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +132,10 @@ class Ledger:
         input_tokens: int,
         output_tokens: int,
         session_id: str | None = None,
+        *,
+        reasoning_tokens: int = 0,
+        cache_read_tokens: int = 0,
+        cache_write_tokens: int = 0,
     ) -> None:
         """Append one entry. Called automatically by ``AIActor``."""
         entry = LedgerEntry(
@@ -122,6 +145,9 @@ class Ledger:
             output_tokens=output_tokens,
             timestamp=datetime.now(UTC),
             session_id=session_id,
+            reasoning_tokens=reasoning_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=cache_write_tokens,
         )
         with self._lock:
             self._entries.append(entry)
@@ -200,6 +226,10 @@ class Ledger:
             "entries": len(self.entries()),
             "input_tokens": usage.input_tokens,
             "output_tokens": usage.output_tokens,
+            "reasoning_tokens": usage.reasoning_tokens,
+            "cache_read_tokens": usage.cache_read_tokens,
+            "cache_write_tokens": usage.cache_write_tokens,
+            "cache_tokens": usage.cache_tokens,
             "total_tokens": usage.total_tokens,
             "by_actor": {k: v.total_tokens for k, v in self.usage_by_actor().items()},
             "by_model": {k: v.total_tokens for k, v in self.usage_by_model().items()},
@@ -215,7 +245,10 @@ class Ledger:
 
     def __repr__(self) -> str:
         u = self.total_usage()
-        return f"Ledger(entries={len(self)}, input={u.input_tokens}, output={u.output_tokens})"
+        return (
+            f"Ledger(entries={len(self)}, input={u.input_tokens}, output={u.output_tokens}, "
+            f"reasoning={u.reasoning_tokens}, cache={u.cache_tokens})"
+        )
 
 
 # ---------------------------------------------------------------------------

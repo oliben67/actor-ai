@@ -1,6 +1,6 @@
 [project]
 name = "actor-ai"
-version = "0.3.4"
+version = "0.3.5"
 description = "Multi-provider AI agents built on pykka."
 readme = "README.md"
 authors = [
@@ -11,8 +11,10 @@ dependencies = [
     "pykka>=4.0",
     "anthropic>=0.40",
     "openai>=1.0",
-    "litellm>=1.0",
     "keyring>=25.0",
+    "litellm",
+    "github-copilot-sdk>=0.3.0",
+    "botocore>=1.43.9",
 ]
 
 [project.urls]
@@ -34,6 +36,9 @@ dev = [
 
 [tool.uv]
 native-tls = true
+
+[tool.uv.pip]
+extra-index-url = ["https://artifactory.azure.scor.com/artifactory/api/pypi/pypi/simple/"]
 
 [build-system]
 requires = ["uv_build>=0.10.12,<0.11.0"]

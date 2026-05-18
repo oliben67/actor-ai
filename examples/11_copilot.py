@@ -46,10 +46,11 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).parent))
 
 # Third party imports:
+from actor_ai.providers.copilot import Copilot, CopilotModel
 from fake_provider import ScriptedProvider, ToolCallingProvider
 
 # Local imports:
-from actor_ai import AIActor, Chorus, Copilot, CopilotModel, tool
+from actor_ai import AIActor, Chorus, tool
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 

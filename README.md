@@ -78,23 +78,25 @@ DataNode = make_agent("DataNode", "Pure coordination actor.")  # no provider
 | `Copilot` | GitHub Copilot (OpenAI-compat) | `GITHUB_TOKEN` |
 | `LiteLLM` | Any (100+ models) | depends on model |
 
-`Copilot` routes requests through GitHub Copilot's OpenAI-compatible endpoint and supports multiple underlying models from a single token:
+`Copilot` routes requests through GitHub Copilot's OpenAI-compatible endpoint and supports multiple underlying models from a single token. Pass `use_sdk=True` (or use the `Copilot_SDK` alias) to call the native Copilot SDK session API instead:
 
 ```python
-from actor_ai import AIActor, Copilot
+from actor_ai import AIActor, Copilot, Copilot_SDK
 
 class Assistant(AIActor):
     system_prompt = "You are a helpful coding assistant."
-    provider = Copilot()                    # gpt-4o (default)
-    provider = Copilot("claude-sonnet-4-5") # Claude via Copilot
-    provider = Copilot("gemini-2.0-flash")  # Gemini via Copilot
+    provider = Copilot()                         # gpt-4o via OpenAI-compat API
+    provider = Copilot("claude-sonnet-4.5")      # Claude via Copilot
+    provider = Copilot("gpt-5")                  # GPT-5 via Copilot
+    provider = Copilot("claude-sonnet-4.5", use_sdk=True)  # Claude via Copilot SDK
+    provider = Copilot_SDK("claude-sonnet-4.5")  # same as above
 
 print(Copilot.MODELS)  # frozenset of valid model strings
 ```
 
-Valid models: `gpt-4o`, `gpt-4o-mini`, `o1`, `o1-mini`, `o3-mini`, `claude-sonnet-4-5`, `gemini-2.0-flash`. Passing any other string raises `ValueError` at construction time.
+Valid models: `gpt-4o`, `gpt-4o-mini`, `gpt-5`, `o1`, `o1-mini`, `o3-mini`, `claude-sonnet-4.5`, `claude-sonnet-4-5`, `gemini-2.0-flash`. Passing any other string raises `ValueError` at construction time.
 
-The token is resolved in order: `api_key` argument → `GITHUB_TOKEN` env var → `gh auth token` CLI → OS keyring (GitHub CLI / VS Code).
+The token is resolved in order: `api_key` argument → `GITHUB_TOKEN` env var → `gh auth token` CLI → OS keyring (GitHub CLI / VS Code). In SDK mode, Copilot CLI authentication is used automatically when no token is supplied.
 
 ## SharedContext
 
@@ -211,7 +213,7 @@ wf.proxy().add_transition(WorkflowTransition("review", "approve", on_event="appr
 - **SharedContext** — thread-safe shared memory (long-term + working) and append-only conversation log across any number of agents; attach with `context=ctx` on `make_agent()` or as a class attribute
 - **Chorus** — group actors as a named team with `broadcast`, `pipeline`, `join`/`leave`, typed (`ChorusType`), nestable
 - **Workflow** — state-machine orchestration with guard and event transitions, parallel actor states, runtime modification, non-blocking `run_detached()`
-- **Accounting** — track token usage and cost per actor, model, and session (`Ledger`, `Rates`)
+- **Accounting** — track token usage (input, output, reasoning, cache read/write) and cost per actor, model, and session (`Ledger`, `Rates`, `UsageSummary`)
 - **Monitoring** — forward per-call metadata to LiteLLM callbacks (Langfuse, Helicone, custom)
 
 ## Examples
@@ -236,6 +238,8 @@ examples/
   14_workflow_parallel.py   — Parallel actor states and run_detached()
   15_make_agent.py          — make_agent() factory: simple agents, tools, sub-agents
   16_shared_context.py      — SharedContext: shared memory, working memory, conversation log
+  17_copilot_sdk.py         — Copilot native SDK session API (use_sdk=True)
+  18_copilot_sdk_memory_logs.py — Copilot SDK with memory, working memory, logs, and ledger
 ```
 
 Run any example:

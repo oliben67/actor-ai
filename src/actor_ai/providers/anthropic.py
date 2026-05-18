@@ -98,6 +98,18 @@ class Claude(LLMProvider):
                     UsageSummary(
                         input_tokens=response.usage.input_tokens or 0,
                         output_tokens=response.usage.output_tokens or 0,
+                        cache_read_tokens=getattr(
+                            response.usage,
+                            "cache_read_input_tokens",
+                            None,
+                        )
+                        or 0,
+                        cache_write_tokens=getattr(
+                            response.usage,
+                            "cache_creation_input_tokens",
+                            None,
+                        )
+                        or 0,
                     )
                 )
 

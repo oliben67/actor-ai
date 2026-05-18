@@ -9,14 +9,12 @@ from .messages import Forget, Instruct, Remember
 from .providers import (
     GPT,
     Claude,
-    Copilot,
-    CopilotModel,
     DeepSeek,
     Gemini,
-    LiteLLM,
     LLMProvider,
     Mistral,
 )
+from .providers.copilot import Copilot, Copilot_SDK, CopilotModel
 from .tools import tool
 from .workflow import Workflow, WorkflowState, WorkflowTransition
 
@@ -27,6 +25,7 @@ __all__ = [
     "Claude",
     "Copilot",
     "CopilotModel",
+    "Copilot_SDK",
     "DeepSeek",
     "Forget",
     "GPT",
@@ -55,3 +54,11 @@ __all__ = [
 def main() -> None:
     print("actor-ai: multi-provider AI agents built on pykka.")
     print("Providers: Claude, Copilot, GPT, Gemini, Mistral, DeepSeek")
+
+
+def __getattr__(name: str):
+    if name == "LiteLLM":
+        from .providers.litellm import LiteLLM
+
+        return LiteLLM
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

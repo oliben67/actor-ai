@@ -615,22 +615,27 @@ Reads `DEEPSEEK_API_KEY`.
 
 ### Copilot (GitHub)
 
-Routes requests through GitHub Copilot's OpenAI-compatible endpoint. Requires a GitHub account with an active Copilot subscription.
+Routes requests through GitHub Copilot's OpenAI-compatible endpoint by default, or through the native Copilot SDK session API when `use_sdk=True`. Requires a GitHub account with an active Copilot subscription.
 
 Token resolution order (first match wins):
 
 1. `api_key` constructor argument
 2. `GITHUB_TOKEN` environment variable
 3. `gh auth token` CLI — works automatically when the [GitHub CLI](https://cli.github.com/) is authenticated
+4. Copilot CLI authentication (SDK mode only, when no token is supplied)
 
 ```python
-from actor_ai import Copilot, CopilotModel
+from actor_ai import Copilot, Copilot_SDK, CopilotModel
 
 agent = make_agent("Agent", "You assist.", Copilot())
-agent = make_agent("Agent", "You assist.", Copilot("claude-sonnet-4-5"))
+agent = make_agent("Agent", "You assist.", Copilot("claude-sonnet-4.5"))
+agent = make_agent("Agent", "You assist.", Copilot("gpt-5", use_sdk=True))
+agent = make_agent("Agent", "You assist.", Copilot_SDK("claude-sonnet-4.5"))  # same as use_sdk=True
 
 print(Copilot.MODELS)   # frozenset of valid model strings
 ```
+
+`Copilot_SDK` is a convenience alias for `Copilot(use_sdk=True)`.
 
 #### Valid models
 
@@ -638,10 +643,12 @@ print(Copilot.MODELS)   # frozenset of valid model strings
 |---|---|
 | `gpt-4o` | Default |
 | `gpt-4o-mini` | |
+| `gpt-5` | |
 | `o1` | |
 | `o1-mini` | |
 | `o3-mini` | |
-| `claude-sonnet-4-5` | Anthropic Claude via Copilot |
+| `claude-sonnet-4.5` | Anthropic Claude via Copilot (preferred form) |
+| `claude-sonnet-4-5` | Alias accepted |
 | `gemini-2.0-flash` | Google Gemini via Copilot |
 
 Passing any other model string raises `ValueError` at construction time. Use `Copilot.MODELS` (a `frozenset[str]`) for runtime validation, or the `CopilotModel` `Literal` for IDE autocompletion.
@@ -651,7 +658,10 @@ Passing any other model string raises `ValueError` at construction time. Use `Co
 | Parameter | Type | Description |
 |---|---|---|
 | `model` | `CopilotModel` | Default: `"gpt-4o"` |
+| `use_sdk` | `bool` | When `True`, call Copilot through the native async SDK session API |
 | `api_key` | `str \| None` | GitHub token; overrides env var and `gh` CLI |
+| `cli_url` | `str \| None` | Existing Copilot CLI server URL (SDK mode) |
+| `cli_path` | `str \| None` | Copilot CLI executable path (SDK mode) |
 | `temperature` | `float \| None` | Sampling temperature |
 | `top_p` | `float \| None` | Nucleus-sampling probability mass |
 | `timeout` | `float \| None` | HTTP timeout in seconds |
@@ -975,9 +985,13 @@ with MyAgent.get_proxy() as proxy:
     proxy.instruct("Second call.").get()
 
     usage = proxy.get_usage().get()
-    print(usage.input_tokens)   # total input tokens across all calls
-    print(usage.output_tokens)  # total output tokens across all calls
-    print(usage.total_tokens)   # input + output
+    print(usage.input_tokens)        # total input tokens
+    print(usage.output_tokens)       # total output tokens
+    print(usage.reasoning_tokens)    # reasoning/thinking tokens (o1, DeepSeek-R1, etc.)
+    print(usage.cache_read_tokens)   # prompt cache read tokens (Claude, Copilot SDK, …)
+    print(usage.cache_write_tokens)  # prompt cache write tokens
+    print(usage.cache_tokens)        # cache_read + cache_write
+    print(usage.total_tokens)        # input + output + reasoning
 
     proxy.reset_usage().get()   # reset counters to zero
     usage = proxy.get_usage().get()
@@ -985,6 +999,16 @@ with MyAgent.get_proxy() as proxy:
 ```
 
 `get_usage()` returns a `UsageSummary` snapshot; it is not affected by subsequent calls until the next `get_usage()` call. `reset_usage()` resets only the counter — it does not affect the session or memory.
+
+`UsageSummary` fields populated per provider:
+
+| Field | Claude | GPT / Gemini | DeepSeek | Copilot SDK | LiteLLM |
+|---|---|---|---|---|---|
+| `input_tokens` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `output_tokens` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `reasoning_tokens` | — | ✓ (o-series) | ✓ (reasoner) | ✓ | ✓ |
+| `cache_read_tokens` | ✓ | ✓ (cached input) | — | ✓ | ✓ |
+| `cache_write_tokens` | ✓ | — | — | ✓ | ✓ |
 
 ### Ledger
 
@@ -1003,7 +1027,7 @@ Agent = make_agent(
 ```
 
 Each completed `instruct()` call appends one `LedgerEntry`:
-- `actor_name`, `model`, `input_tokens`, `output_tokens`, `timestamp`, `session_id`
+- `actor_name`, `model`, `input_tokens`, `output_tokens`, `reasoning_tokens`, `cache_read_tokens`, `cache_write_tokens`, `timestamp`, `session_id`
 
 #### Reading the ledger
 
@@ -1286,7 +1310,8 @@ class WorkflowTransition:
 ### Ledger public API
 
 ```python
-record(actor_name, model, input_tokens, output_tokens, session_id=None) -> None
+record(actor_name, model, input_tokens, output_tokens, session_id=None, *,
+       reasoning_tokens=0, cache_read_tokens=0, cache_write_tokens=0) -> None
 clear() -> None
 
 entries() -> list[LedgerEntry]
@@ -1338,7 +1363,7 @@ from actor_ai import (
     # Workflow
     Workflow, WorkflowState, WorkflowTransition,
     # Providers
-    Claude, Copilot, CopilotModel, GPT, Gemini, Mistral, DeepSeek, LiteLLM, LLMProvider,
+    Claude, Copilot, Copilot_SDK, CopilotModel, GPT, Gemini, Mistral, DeepSeek, LiteLLM, LLMProvider,
     # Messages
     Instruct, Remember, Forget,
     # Accounting

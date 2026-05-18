@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"name": "copilot SDK",
+			"path": "../../copilot-sdk"
+		}
+	],
+	"settings": {
+		"python.defaultInterpreterPath": "/home/scor/sources/actor-ai/.venv/bin/python"
+	}
+}

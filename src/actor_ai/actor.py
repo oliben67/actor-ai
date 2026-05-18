@@ -195,6 +195,9 @@ class AIActor(pykka.ThreadingActor):
                 input_tokens=accumulated.input_tokens,
                 output_tokens=accumulated.output_tokens,
                 session_id=self._session_id,
+                reasoning_tokens=accumulated.reasoning_tokens,
+                cache_read_tokens=accumulated.cache_read_tokens,
+                cache_write_tokens=accumulated.cache_write_tokens,
             )
 
         if use_session and history is None:
@@ -343,6 +346,9 @@ class AIActor(pykka.ThreadingActor):
         return UsageSummary(
             input_tokens=self._usage.input_tokens,
             output_tokens=self._usage.output_tokens,
+            reasoning_tokens=self._usage.reasoning_tokens,
+            cache_read_tokens=self._usage.cache_read_tokens,
+            cache_write_tokens=self._usage.cache_write_tokens,
         )
 
     def reset_usage(self) -> None:

@@ -130,6 +130,22 @@ class LiteLLM(LLMProvider):
                         UsageSummary(
                             input_tokens=getattr(usage, "prompt_tokens", None) or 0,
                             output_tokens=getattr(usage, "completion_tokens", None) or 0,
+                            reasoning_tokens=_usage_detail_token_count(
+                                usage,
+                                "completion_tokens_details",
+                                "reasoning_tokens",
+                            ),
+                            cache_read_tokens=_usage_detail_token_count(
+                                usage,
+                                "prompt_tokens_details",
+                                "cached_tokens",
+                            )
+                            or _usage_token_count(
+                                getattr(usage, "cache_read_input_tokens", None)
+                            ),
+                            cache_write_tokens=_usage_token_count(
+                                getattr(usage, "cache_creation_input_tokens", None)
+                            ),
                         )
                     )
 
@@ -168,3 +184,20 @@ def _to_openai_tool(spec: dict) -> dict:
             "parameters": spec["input_schema"],
         },
     }
+
+
+def _usage_detail_token_count(usage: object, detail_name: str, token_name: str) -> int:
+    details = getattr(usage, detail_name, None)
+    if details is None:
+        return 0
+    if isinstance(details, dict):
+        value = details.get(token_name)
+    else:
+        value = getattr(details, token_name, None)
+    return _usage_token_count(value)
+
+
+def _usage_token_count(value: object) -> int:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return int(value)
+    return 0
