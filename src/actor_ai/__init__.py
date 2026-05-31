@@ -35,7 +35,7 @@ __all__ = [
     "LLMProvider",
     "Ledger",
     "LedgerEntry",
-    "LiteLLM",
+    "LiteLLM",  # pyright: ignore[reportUnsupportedDunderAll]
     "Mistral",
     "ModelRate",
     "MonitoringContext",

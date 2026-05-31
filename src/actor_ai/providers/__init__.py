@@ -15,7 +15,7 @@ __all__ = [
     "DeepSeek",
     "Gemini",
     "LLMProvider",
-    "LiteLLM",
+    "LiteLLM",  # pyright: ignore[reportUnsupportedDunderAll]
     "Mistral",
 ]
 

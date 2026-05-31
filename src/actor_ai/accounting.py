@@ -49,7 +49,7 @@ class UsageSummary:
 
     def __add__(self, other: UsageSummary) -> UsageSummary:
         return UsageSummary(
-            self.input_tokens + other.input_tokens,
+            self.input_tokens + other.input_tokens,  # pyright: ignore[reportCallIssue]
             self.output_tokens + other.output_tokens,
             self.reasoning_tokens + other.reasoning_tokens,
             self.cache_read_tokens + other.cache_read_tokens,
