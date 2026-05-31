@@ -17,7 +17,7 @@ from copilot.tools import Tool, ToolInvocation, ToolResult
 from actor_ai.accounting import MonitoringContext, UsageSummary
 from actor_ai.providers.openai import _OpenAICompatible, _resolve_github_token
 
-# Literal type for IDE autocomplete — keep in sync with Copilot.MODELS below.
+# Literal type for IDE autocomplete — kept in sync with Copilot.MODELS below.
 CopilotModel = Literal[
     "gpt-4o",
     "gpt-4o-mini",
@@ -25,8 +25,9 @@ CopilotModel = Literal[
     "o1-mini",
     "o3-mini",
     "gpt-5",
-    "claude-sonnet-4.5",
     "claude-sonnet-4-5",
+    "claude-sonnet-4-6",
+    "claude-sonnet-4-7",
     "gemini-2.0-flash",
 ]
 
@@ -47,9 +48,12 @@ class Copilot(_OpenAICompatible):
     * ``gpt-4o`` (default)
     * ``gpt-4o-mini``
     * ``gpt-5``
-    * ``o1``, ``o1-mini``, ``o3-mini``
-    * ``claude-sonnet-4.5``
+    * ``o1``
+    * ``o1-mini``
+    * ``o3-mini``
     * ``claude-sonnet-4-5``
+    * ``claude-sonnet-4-6``
+    * ``claude-sonnet-4-7``
     * ``gemini-2.0-flash``
 
     The OpenAI-compatible path reads ``GITHUB_TOKEN`` by default and sends the
@@ -96,17 +100,7 @@ class Copilot(_OpenAICompatible):
     """
 
     MODELS: frozenset[str] = frozenset(
-        {
-            "gpt-4o",
-            "gpt-4o-mini",
-            "o1",
-            "o1-mini",
-            "o3-mini",
-            "gpt-5",
-            "claude-sonnet-4.5",
-            "claude-sonnet-4-5",
-            "gemini-2.0-flash",
-        }
+        {arg for arg in getattr(CopilotModel, "__args__", []) if isinstance(arg, str)}
     )
 
     _BASE_URL = "https://api.githubcopilot.com"
