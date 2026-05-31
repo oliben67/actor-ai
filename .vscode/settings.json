@@ -1,3 +1,10 @@
 {
-    "python.defaultInterpreterPath": "/home/scor/sources/actor-ai/.venv/bin/python"
+    "python.defaultInterpreterPath": "/home/scor/sources/actor-ai/.venv/bin/python",
+    "python-envs.pythonProjects": [
+        {
+            "path": ".",
+            "envManager": "ms-python.python:venv",
+            "packageManager": "ms-python.python:pip"
+        }
+    ]
 }

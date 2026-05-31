@@ -2,10 +2,6 @@
 	"folders": [
 		{
 			"path": ".."
-		},
-		{
-			"name": "copilot SDK",
-			"path": "../../copilot-sdk"
 		}
 	],
 	"settings": {
