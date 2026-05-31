@@ -1,6 +1,6 @@
 [project]
 name = "actor-ai"
-version = "0.3.6"
+version = "0.3.7"
 description = "Multi-provider AI agents built on pykka."
 readme = "README.md"
 authors = [
@@ -39,6 +39,11 @@ native-tls = true
 
 [tool.uv.pip]
 extra-index-url = ["https://artifactory.azure.scor.com/artifactory/api/pypi/pypi/simple/"]
+
+[tool.uv.workspace]
+members = [
+    ".vscode/sandpit",
+]
 
 [build-system]
 requires = ["uv_build>=0.10.12,<0.11.0"]
