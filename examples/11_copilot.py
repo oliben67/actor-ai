@@ -8,11 +8,11 @@ It requires a GitHub account with an active Copilot subscription
 
 Supported models (mid-2025)
 ----------------------------
-    gpt-4o             (default)
-    gpt-4o-mini
-    o1, o3-mini
-    claude-sonnet-4-5
-    gemini-2.0-flash
+    auto               (default)
+    gpt-5.4, gpt-5.4-mini, gpt-5.5, gpt-5-mini, gpt-5.3-codex
+    claude-sonnet-4.5, claude-sonnet-4.6
+    claude-opus-4.7, claude-opus-4.8, claude-haiku-4.5
+    gemini-3.5-flash, gemini-3.1-pro-preview
 
 The provider sends the ``Copilot-Integration-Id: vscode-chat`` header
 automatically so GitHub routes the request correctly.
@@ -41,6 +41,7 @@ from __future__ import annotations
 # Standard library imports:
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -88,7 +89,7 @@ def _section_construction() -> None:
     print(f"  integration header  : {captured['default_headers']}")
 
     with patch("actor_ai.providers.openai.OpenAI", side_effect=_capture):
-        prov2 = Copilot("claude-sonnet-4-5", temperature=0.2, seed=42)
+        prov2 = Copilot("claude-sonnet-4.5", temperature=0.2, seed=42)
 
     print(f"\n  custom model        : {prov2.model}")
     print(f"  temperature stored  : {prov2.temperature}")
@@ -195,7 +196,7 @@ def _section_models() -> None:
     # Copilot.MODELS: frozenset[str] — for runtime checks and iteration
     print("  Copilot.MODELS (runtime frozenset):")
     for m in sorted(Copilot.MODELS):
-        marker = " ← default" if m == "gpt-4o" else ""
+        marker = " ← default" if m == "auto" else ""
         print(f"    {m}{marker}")
 
     # CopilotModel: Literal[...] — for IDE autocompletion / type checking
@@ -217,11 +218,40 @@ def _section_models() -> None:
         print(f"  ValueError: {exc}")
 
 
-# ── 5. Tool calling through Copilot ──────────────────────────────────────────
+# ── 5. available_models() — what the endpoint offers ─────────────────────────
+
+
+def _section_available_models() -> None:
+    _divider("5. available_models() — querying the live model list")
+
+    # Classmethod: queries the OpenAI-compatible /v1/models endpoint with a 6-hour TTL cache
+    mock_client = MagicMock()
+    mock_client.models.list.return_value = [
+        SimpleNamespace(id="gpt-5.4"),
+        SimpleNamespace(id="claude-sonnet-4.5"),
+        SimpleNamespace(id="gpt-5-mini"),
+    ]
+    with patch("actor_ai.providers.copilot.OpenAI", return_value=mock_client):
+        with patch("actor_ai.providers.copilot._resolve_github_token", return_value="tok"):
+            print("  Copilot.available_models() (OpenAI-compatible endpoint):")
+            for m in Copilot.available_models():
+                print(f"    {m}")
+
+    # Refresh clears the TTL cache and forces a new API call
+    print("\n  Copilot.available_models(refresh=True) forces a new call:")
+    mock_client2 = MagicMock()
+    mock_client2.models.list.return_value = [SimpleNamespace(id=m) for m in sorted(Copilot.MODELS)]
+    with patch("actor_ai.providers.copilot.OpenAI", return_value=mock_client2):
+        with patch("actor_ai.providers.copilot._resolve_github_token", return_value="tok"):
+            for m in Copilot.available_models(refresh=True):
+                print(f"    {m}")
+
+
+# ── 7. Tool calling through Copilot ──────────────────────────────────────────
 
 
 def _section_tools() -> None:
-    _divider("5. Tool calling via Copilot")
+    _divider("6. Tool calling via Copilot")
 
     prov = ToolCallingProvider(
         tool_name="list_files",
@@ -253,11 +283,11 @@ def _section_tools() -> None:
         ref.stop()
 
 
-# ── 6. Copilot in a Chorus ────────────────────────────────────────────────────
+# ── 8. Copilot in a Chorus ────────────────────────────────────────────────────
 
 
 def _section_chorus() -> None:
-    _divider("6. Copilot agents in a Chorus")
+    _divider("7. Copilot agents in a Chorus")
 
     class CopilotReviewer(AIActor):
         system_prompt = "You are a senior code reviewer using GitHub Copilot."
@@ -311,6 +341,7 @@ def main() -> None:
     _section_token({})
     _section_instruct()
     _section_models()
+    _section_available_models()
     _section_tools()
     _section_chorus()
 

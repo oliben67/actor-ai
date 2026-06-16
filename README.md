@@ -69,7 +69,7 @@ DataNode = make_agent("DataNode", "Pure coordination actor.")  # no provider
 ## Providers
 
 | Class | Backend | Environment variable |
-|---|---|---|
+| --- | --- | --- |
 | `Claude` | Anthropic | `ANTHROPIC_API_KEY` |
 | `GPT` | OpenAI | `OPENAI_API_KEY` |
 | `Gemini` | Google AI (OpenAI-compat) | `GOOGLE_API_KEY` |
@@ -85,16 +85,18 @@ from actor_ai import AIActor, Copilot, Copilot_SDK
 
 class Assistant(AIActor):
     system_prompt = "You are a helpful coding assistant."
-    provider = Copilot()                         # gpt-4o via OpenAI-compat API
+    provider = Copilot()                         # auto (Copilot picks the best model)
     provider = Copilot("claude-sonnet-4.5")      # Claude via Copilot
-    provider = Copilot("gpt-5")                  # GPT-5 via Copilot
+    provider = Copilot("gpt-5.4")                # GPT via Copilot
     provider = Copilot("claude-sonnet-4.5", use_sdk=True)  # Claude via Copilot SDK
     provider = Copilot_SDK("claude-sonnet-4.5")  # same as above
 
-print(Copilot.MODELS)  # frozenset of valid model strings
+print(Copilot.MODELS)                       # frozenset of valid model strings
+print(Copilot.available_models())           # live list from /v1/models endpoint
+print(Copilot.available_models(use_sdk=True))  # live list via CopilotClient SDK
 ```
 
-Valid models: `gpt-4o`, `gpt-4o-mini`, `gpt-5`, `o1`, `o1-mini`, `o3-mini`, `claude-sonnet-4.5`, `claude-sonnet-4-5`, `gemini-2.0-flash`. Passing any other string raises `ValueError` at construction time.
+Passing any unsupported model string raises `ValueError` at construction time. The valid set is defined by the `CopilotModel` `Literal` and reflected in `Copilot.MODELS`.
 
 The token is resolved in order: `api_key` argument → `GITHUB_TOKEN` env var → `gh auth token` CLI → OS keyring (GitHub CLI / VS Code). In SDK mode, Copilot CLI authentication is used automatically when no token is supplied.
 
@@ -120,10 +122,10 @@ for entry in ctx.get_log():
     print(entry["agent"], entry["role"], entry["content"][:80])
 ```
 
-**Memory tiers**
+### Memory tiers
 
 | Tier | API | Scope | Cleared by |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Long-term | `remember` / `forget` | All agents, all sessions | `forget()` only |
 | Working | `remember_working` / `forget_working` | All agents, current task | `clear_working_memory()` |
 | Conversation log | read-only via `get_log()` | Append-only across all agents | `clear_log()` |
@@ -220,7 +222,7 @@ wf.proxy().add_transition(WorkflowTransition("review", "approve", on_event="appr
 
 The [`examples/`](examples/) directory contains self-contained, runnable scripts. Each example uses a fake scripted provider so no API key is required.
 
-```
+```text
 examples/
   01_hello_world.py         — One-turn interaction
   02_session.py             — Session history, max_history, clear_session

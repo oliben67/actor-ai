@@ -23,7 +23,8 @@ from __future__ import annotations
 # Standard library imports:
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -137,6 +138,27 @@ def main() -> None:
     _show("LiteLLM('openai/gpt-4o', temperature=0.3)", ll_gpt)
     _show("LiteLLM('anthropic/claude-sonnet-4-6', max_retries=3)", ll_claude)
     _show("LiteLLM('gemini/gemini-2.0-flash', top_p=0.9)", ll_gemini)
+
+    # ── available_models() ────────────────────────────────────────────
+    _divider("available_models() — list what the endpoint offers")
+
+    fake_models = [
+        SimpleNamespace(id="gpt-4o"),
+        SimpleNamespace(id="gpt-4o-mini"),
+        SimpleNamespace(id="gpt-3.5-turbo"),
+    ]
+    mock_client = MagicMock()
+    mock_client.models.list.return_value = fake_models
+    print("  GPT.available_models():")
+    with patch("actor_ai.providers.openai.OpenAI", return_value=mock_client):
+        for m in GPT.available_models():
+            print(f"    {m}")
+
+    litellm_models = ["anthropic/claude-sonnet-4-6", "openai/gpt-4o", "gemini/gemini-2.0-flash"]
+    with patch("litellm.utils.get_valid_models", return_value=litellm_models):
+        print("\n  LiteLLM.available_models() (keys present in env):")
+        for m in LiteLLM.available_models():
+            print(f"    {m}")
 
     # ── Swapping providers on an actor ────────────────────────────────
     _divider("Swapping providers on an actor")

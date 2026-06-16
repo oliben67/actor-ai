@@ -7,9 +7,13 @@ from collections.abc import Callable
 
 # Third party imports:
 from anthropic import Anthropic
+from cachetools import TTLCache, cached
+from cachetools.keys import hashkey
 
 from ..accounting import MonitoringContext, UsageSummary
 from .base import LLMProvider
+
+_MODELS_CACHE: TTLCache = TTLCache(maxsize=1, ttl=3600 * 6)
 
 
 class Claude(LLMProvider):
@@ -61,6 +65,18 @@ class Claude(LLMProvider):
             api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"),
             timeout=timeout,
         )
+
+    @classmethod
+    def available_models(cls, refresh: bool = False) -> list[str]:
+        if refresh:
+            _MODELS_CACHE.pop(hashkey(cls), None)
+        return cls._fetch_models()
+
+    @classmethod
+    @cached(_MODELS_CACHE)
+    def _fetch_models(cls) -> list[str]:
+        client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+        return sorted(m.id for m in client.models.list())
 
     def run(
         self,

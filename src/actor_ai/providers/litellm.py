@@ -7,9 +7,13 @@ from collections.abc import Callable
 
 # Third party imports:
 import litellm
+from cachetools import TTLCache, cached
+from cachetools.keys import hashkey
 
 from ..accounting import MonitoringContext, UsageSummary
 from .base import LLMProvider
+
+_MODELS_CACHE: TTLCache = TTLCache(maxsize=1, ttl=3600 * 6)
 
 
 class LiteLLM(LLMProvider):
@@ -77,6 +81,17 @@ class LiteLLM(LLMProvider):
             litellm.success_callback = list(success_callbacks)
         if failure_callbacks is not None:
             litellm.failure_callback = list(failure_callbacks)
+
+    @classmethod
+    def available_models(cls, refresh: bool = False) -> list[str]:
+        if refresh:
+            _MODELS_CACHE.pop(hashkey(cls), None)
+        return cls._fetch_models()
+
+    @classmethod
+    @cached(_MODELS_CACHE)
+    def _fetch_models(cls) -> list[str]:
+        return sorted(litellm.utils.get_valid_models())
 
     def run(
         self,

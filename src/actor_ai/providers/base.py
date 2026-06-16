@@ -58,3 +58,12 @@ class LLMProvider(ABC):
             monitoring_context: Optional metadata forwarded to LiteLLM for
                       monitoring.  Ignored by all other providers.
         """
+
+    @classmethod
+    @abstractmethod
+    def available_models(cls, refresh: bool = False) -> list[str]:
+        """Return a sorted list of model IDs available through this provider.
+
+        Results are cached for 6 hours. Pass ``refresh=True`` to force a
+        live API call and repopulate the cache.
+        """

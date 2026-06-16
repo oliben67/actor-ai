@@ -39,6 +39,10 @@ class ScriptedProvider(LLMProvider):
         self._usage = usage or UsageSummary(input_tokens=50, output_tokens=30)
         self.calls: list[dict] = []
 
+    @classmethod
+    def available_models(cls, refresh: bool = False) -> list[str]:
+        return ["scripted/demo"]
+
     def run(
         self,
         system: str,
@@ -87,6 +91,10 @@ class ToolCallingProvider(LLMProvider):
         self._dispatched = False
         self.tool_result: object = None
         self._usage = usage or UsageSummary(input_tokens=80, output_tokens=40)
+
+    @classmethod
+    def available_models(cls, refresh: bool = False) -> list[str]:
+        return ["scripted/demo"]
 
     def run(
         self,

@@ -4,6 +4,7 @@ from __future__ import annotations
 from .accounting import Ledger, LedgerEntry, ModelRate, MonitoringContext, Rates, UsageSummary
 from .actor import AIActor, InstructionInput, make_agent
 from .chorus import Chorus, ChorusType
+from .code_actor import CodeActorContext, PythonCodeActor, cron, event, loop, on_message
 from .context import SharedContext
 from .messages import Forget, Instruct, Remember
 from .providers import (
@@ -23,6 +24,7 @@ __all__ = [
     "Chorus",
     "ChorusType",
     "Claude",
+    "CodeActorContext",
     "Copilot",
     "CopilotModel",
     "Copilot_SDK",
@@ -39,6 +41,7 @@ __all__ = [
     "Mistral",
     "ModelRate",
     "MonitoringContext",
+    "PythonCodeActor",
     "Rates",
     "Remember",
     "SharedContext",
@@ -46,7 +49,11 @@ __all__ = [
     "Workflow",
     "WorkflowState",
     "WorkflowTransition",
+    "cron",
+    "event",
+    "loop",
     "make_agent",
+    "on_message",
     "tool",
 ]
 

@@ -8,13 +8,19 @@ import subprocess
 from collections.abc import Callable
 
 # Third party imports:
+from cachetools import TTLCache, cached
+from cachetools.keys import hashkey
 from openai import OpenAI
 
 from ..accounting import MonitoringContext, UsageSummary
 from .base import LLMProvider
 
+_MODELS_CACHE: TTLCache = TTLCache(maxsize=8, ttl=3600 * 6)
+
 
 class _OpenAICompatible(LLMProvider):
+    _API_KEY_ENV: str = "OPENAI_API_KEY"
+    _BASE_URL: str | None = None
     """Base for all OpenAI-compatible providers (GPT, Gemini, Mistral, DeepSeek).
 
     Converts tool specs from Anthropic's canonical ``input_schema`` format to
@@ -71,6 +77,21 @@ class _OpenAICompatible(LLMProvider):
             timeout=timeout,
             default_headers=default_headers,
         )
+
+    @classmethod
+    def available_models(cls, refresh: bool = False) -> list[str]:
+        if refresh:
+            _MODELS_CACHE.pop(hashkey(cls), None)
+        return cls._fetch_models()
+
+    @classmethod
+    @cached(_MODELS_CACHE)
+    def _fetch_models(cls) -> list[str]:
+        client = OpenAI(
+            api_key=os.environ.get(cls._API_KEY_ENV),
+            base_url=cls._BASE_URL,
+        )
+        return sorted(m.id for m in client.models.list())
 
     def run(
         self,
@@ -232,6 +253,9 @@ class Gemini(_OpenAICompatible):
                               temperature=0.4)
     """
 
+    _API_KEY_ENV = "GOOGLE_API_KEY"
+    _BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
     def __init__(
         self,
         model: str = "gemini-2.0-flash",
@@ -269,6 +293,9 @@ class Mistral(_OpenAICompatible):
                                temperature=0.7)
     """
 
+    _API_KEY_ENV = "MISTRAL_API_KEY"
+    _BASE_URL = "https://api.mistral.ai/v1"
+
     def __init__(
         self,
         model: str = "mistral-large-latest",
@@ -303,6 +330,9 @@ class DeepSeek(_OpenAICompatible):
             provider = DeepSeek("deepseek-reasoner",
                                 temperature=0.0)
     """
+
+    _API_KEY_ENV = "DEEPSEEK_API_KEY"
+    _BASE_URL = "https://api.deepseek.com/v1"
 
     def __init__(
         self,

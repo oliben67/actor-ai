@@ -16,6 +16,7 @@ import pytest
 from actor_ai.providers.anthropic import Claude
 from actor_ai.providers.base import LLMProvider
 from actor_ai.providers.copilot import Copilot, Copilot_SDK
+from actor_ai.providers.litellm import LiteLLM
 from actor_ai.providers.openai import (
     GPT,
     DeepSeek,
@@ -80,6 +81,10 @@ class TestLLMProviderABC:
 
             def run(self, system, messages, tools, dispatcher, max_tokens):
                 return "ok"
+
+            @classmethod
+            def available_models(cls, refresh: bool = False):
+                return []
 
         assert Complete().run("s", [], [], lambda n, a: None, 100) == "ok"
 
@@ -228,6 +233,30 @@ class TestClaude:
         result = provider.run("sys", [], [], dispatcher, 1024)
         assert result == "The answer is 42."
         dispatcher.assert_called_once_with("add", {"a": 1, "b": 2})
+
+    def test_available_models_returns_sorted_ids(self):
+        mock_client = MagicMock()
+        mock_client.models.list.return_value = [
+            SimpleNamespace(id="claude-opus-4-8"),
+            SimpleNamespace(id="claude-haiku-4-5-20251001"),
+            SimpleNamespace(id="claude-sonnet-4-6"),
+        ]
+        with patch("actor_ai.providers.anthropic.Anthropic", return_value=mock_client):
+            result = Claude.available_models()
+        assert result == [
+            "claude-haiku-4-5-20251001",
+            "claude-opus-4-8",
+            "claude-sonnet-4-6",
+        ]
+        mock_client.models.list.assert_called_once()
+
+    def test_available_models_refresh_bypasses_cache(self):
+        mock_client = MagicMock()
+        mock_client.models.list.return_value = [SimpleNamespace(id="claude-sonnet-4-6")]
+        with patch("actor_ai.providers.anthropic.Anthropic", return_value=mock_client):
+            Claude.available_models()
+            Claude.available_models(refresh=True)
+        assert mock_client.models.list.call_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -393,6 +422,33 @@ class TestGPT:
         assert tool_result["tool_call_id"] == "call_xyz"
         assert tool_result["content"] == "42"
 
+    def test_available_models_returns_sorted_ids(self):
+        mock_client = MagicMock()
+        mock_client.models.list.return_value = [
+            SimpleNamespace(id="gpt-4o-mini"),
+            SimpleNamespace(id="gpt-4o"),
+            SimpleNamespace(id="gpt-3.5-turbo"),
+        ]
+        with patch("actor_ai.providers.openai.OpenAI", return_value=mock_client):
+            result = GPT.available_models()
+        assert result == ["gpt-3.5-turbo", "gpt-4o", "gpt-4o-mini"]
+        mock_client.models.list.assert_called_once()
+
+    def test_available_models_empty_endpoint(self):
+        mock_client = MagicMock()
+        mock_client.models.list.return_value = []
+        with patch("actor_ai.providers.openai.OpenAI", return_value=mock_client):
+            result = GPT.available_models()
+        assert result == []
+
+    def test_available_models_refresh_bypasses_cache(self):
+        mock_client = MagicMock()
+        mock_client.models.list.return_value = [SimpleNamespace(id="gpt-4o")]
+        with patch("actor_ai.providers.openai.OpenAI", return_value=mock_client):
+            GPT.available_models()
+            GPT.available_models(refresh=True)
+        assert mock_client.models.list.call_count == 2
+
 
 # ---------------------------------------------------------------------------
 # OpenAI-compatible subclasses — model/URL defaults
@@ -407,7 +463,7 @@ class TestProviderDefaults:
             (Gemini, "gemini-2.0-flash"),
             (Mistral, "mistral-large-latest"),
             (DeepSeek, "deepseek-chat"),
-            (Copilot, "gpt-4o"),
+            (Copilot, "auto"),
         ],
     )
     def test_default_model(self, cls, expected_model):
@@ -598,6 +654,42 @@ class TestGPTConfiguration:
             mock_oai.side_effect = lambda **kw: captured.update(kw) or MagicMock()
             GPT(timeout=20.0)
         assert captured.get("timeout") == 20.0
+
+
+# ---------------------------------------------------------------------------
+# LiteLLM provider
+# ---------------------------------------------------------------------------
+
+
+class TestLiteLLM:
+    def test_default_model(self):
+        p = LiteLLM("openai/gpt-4o")
+        assert p.model == "openai/gpt-4o"
+
+    def test_is_llm_provider(self):
+        p = LiteLLM("openai/gpt-4o")
+        assert isinstance(p, LLMProvider)
+
+    def test_available_models_returns_sorted_list(self):
+        raw = ["openai/gpt-4o", "anthropic/claude-sonnet-4-6", "gemini/gemini-2.0-flash"]
+        with patch("litellm.utils.get_valid_models", return_value=raw):
+            result = LiteLLM.available_models()
+        assert result == sorted(raw)
+
+    def test_available_models_calls_get_valid_models(self):
+        with patch("litellm.utils.get_valid_models", return_value=[]) as mock_gvm:
+            LiteLLM.available_models()
+        mock_gvm.assert_called_once()
+
+    def test_available_models_empty(self):
+        with patch("litellm.utils.get_valid_models", return_value=[]):
+            assert LiteLLM.available_models() == []
+
+    def test_available_models_refresh_bypasses_cache(self):
+        with patch("litellm.utils.get_valid_models", return_value=["openai/gpt-4o"]) as mock_gvm:
+            LiteLLM.available_models()
+            LiteLLM.available_models(refresh=True)
+        assert mock_gvm.call_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -812,11 +904,11 @@ class TestCopilotProvider:
 
     def test_default_model(self):
         p = self._make()
-        assert p.model == "gpt-4o"
+        assert p.model == "auto"
 
     def test_custom_model(self):
-        p = self._make(model="claude-sonnet-4-5")
-        assert p.model == "claude-sonnet-4-5"
+        p = self._make(model="claude-sonnet-4.5")
+        assert p.model == "claude-sonnet-4.5"
 
     def test_base_url_is_githubcopilot(self):
         captured = self._captured_init()
@@ -1006,16 +1098,90 @@ class TestCopilotProvider:
 
         assert CopilotPublic is Copilot
 
+    # -- available_models (classmethod, queries /v1/models via OpenAI client) --
+
+    def test_available_models_delegates_to_openai_compatible(self):
+        mock_client = MagicMock()
+        mock_client.models.list.return_value = [
+            SimpleNamespace(id="gpt-5.4"),
+            SimpleNamespace(id="claude-sonnet-4.5"),
+            SimpleNamespace(id="gpt-5-mini"),
+        ]
+        with patch("actor_ai.providers.copilot.OpenAI", return_value=mock_client):
+            with patch("actor_ai.providers.copilot._resolve_github_token", return_value="tok"):
+                result = Copilot.available_models()
+        assert result == ["claude-sonnet-4.5", "gpt-5-mini", "gpt-5.4"]
+
+    def test_available_models_calls_models_list(self):
+        mock_client = MagicMock()
+        mock_client.models.list.return_value = []
+        with patch("actor_ai.providers.copilot.OpenAI", return_value=mock_client):
+            with patch("actor_ai.providers.copilot._resolve_github_token", return_value="tok"):
+                Copilot.available_models()
+        mock_client.models.list.assert_called_once()
+
+    def test_available_models_refresh_bypasses_cache(self):
+        mock_client = MagicMock()
+        mock_client.models.list.return_value = [SimpleNamespace(id="gpt-5.4")]
+        with patch("actor_ai.providers.copilot.OpenAI", return_value=mock_client):
+            with patch("actor_ai.providers.copilot._resolve_github_token", return_value="tok"):
+                Copilot.available_models()
+                Copilot.available_models(refresh=True)
+        assert mock_client.models.list.call_count == 2
+
+    def test_run_sdk_reply_with_non_message_data_returns_empty(self):
+        """Reply is truthy but data is not AssistantMessageData → returns ''."""
+        # Standard library imports:
+        from types import SimpleNamespace as NS
+
+        class FakeSession:
+            def __init__(self):
+                self.handlers = []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return None
+
+            def on(self, handler):
+                self.handlers.append(handler)
+
+                def unsubscribe():
+                    self.handlers.remove(handler)
+
+                return unsubscribe
+
+            async def send_and_wait(self, prompt, *, timeout):
+                return NS(data=NS())  # truthy reply, but data not AssistantMessageData
+
+        class FakeClient:
+            def __init__(self, config=None):
+                self.session = FakeSession()
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return None
+
+            async def create_session(self, **kwargs):
+                return self.session
+
+        with patch("actor_ai.providers.copilot.CopilotClient", FakeClient):
+            result = Copilot("auto", use_sdk=True).run("s", [], [], lambda n, a: None, 100)
+        assert result == ""
+
 
 class TestCopilotSDKProvider:
     def test_default_model(self):
         p = Copilot(use_sdk=True)
-        assert p.model == "gpt-4o"
+        assert p.model == "auto"
         assert p.use_sdk is True
 
     def test_copilot_sdk_alias_enables_sdk_mode(self):
         p = Copilot_SDK()
-        assert p.model == "gpt-4o"
+        assert p.model == "auto"
         assert p.use_sdk is True
 
     def test_invalid_model_raises_value_error(self):
@@ -1079,7 +1245,7 @@ class TestCopilotSDKProvider:
 
         with patch("actor_ai.providers.copilot._resolve_github_token", return_value=None):
             with patch("actor_ai.providers.copilot.CopilotClient", FakeClient):
-                provider = Copilot("claude-sonnet-4-5", use_sdk=True, timeout=12.5)
+                provider = Copilot("claude-sonnet-4.5", use_sdk=True, timeout=12.5)
                 result = provider.run(
                     "be brief",
                     [{"role": "user", "content": "double 5"}],
@@ -1093,7 +1259,7 @@ class TestCopilotSDKProvider:
         assert client.config is None
         assert client.session.prompt == "user: double 5"
         assert client.session.timeout == 12.5
-        assert client.create_kwargs["model"] == "claude-sonnet-4-5"
+        assert client.create_kwargs["model"] == "claude-sonnet-4.5"
         assert client.create_kwargs["system_message"] == {"mode": "replace", "content": "be brief"}
         assert client.create_kwargs["on_permission_request"] is not None
         assert len(client.create_kwargs["tools"]) == 1
@@ -1118,13 +1284,16 @@ class TestCopilotSDKProvider:
                 return self
 
             async def __aexit__(self, exc_type, exc_val, exc_tb):
+                # Simulate disconnect: clear all event handlers (mirrors real SDK behaviour).
+                self.handlers.clear()
                 return None
 
             def on(self, handler):
                 self.handlers.append(handler)
 
                 def unsubscribe():
-                    self.handlers.remove(handler)
+                    if handler in self.handlers:
+                        self.handlers.remove(handler)
 
                 return unsubscribe
 
@@ -1134,7 +1303,7 @@ class TestCopilotSDKProvider:
                     handler(
                         SimpleNamespace(
                             data=AssistantUsageData(
-                                model="claude-sonnet-4-5",
+                                model="claude-sonnet-4.5",
                                 input_tokens=42.0,
                                 output_tokens=11.0,
                                 reasoning_tokens=7.0,
@@ -1146,7 +1315,7 @@ class TestCopilotSDKProvider:
                     handler(
                         SimpleNamespace(
                             data=AssistantUsageData(
-                                model="claude-sonnet-4-5",
+                                model="claude-sonnet-4.5",
                                 input_tokens=3.0,
                                 output_tokens=2.0,
                                 reasoning_tokens=1.0,
@@ -1172,12 +1341,14 @@ class TestCopilotSDKProvider:
                 return None
 
             async def create_session(self, **kwargs):
-                del kwargs
+                on_event = kwargs.get("on_event")
+                if on_event:
+                    self.session.on(on_event)
                 return self.session
 
         received = []
         with patch("actor_ai.providers.copilot.CopilotClient", FakeClient):
-            provider = Copilot("claude-sonnet-4-5", use_sdk=True)
+            provider = Copilot("claude-sonnet-4.5", use_sdk=True)
             result = provider.run(
                 "be brief",
                 [{"role": "user", "content": "hello"}],
@@ -1295,12 +1466,86 @@ class TestCopilotSDKProvider:
 
         received = []
         with patch("actor_ai.providers.copilot.CopilotClient", FakeClient):
-            result = Copilot("gpt-4o", use_sdk=True).run(
+            result = Copilot("auto", use_sdk=True).run(
                 "sys", [], [], lambda n, a: None, 100, on_usage=received.append
             )
 
         assert result == ""
         assert received == []
+
+    # -- available_models(use_sdk=True) — uses CopilotClient.list_models() --
+
+    def test_available_models_sdk_calls_copilot_client(self):
+        class FakeClient:
+            async def start(self):
+                pass
+
+            async def stop(self):
+                pass
+
+            async def list_models(self):
+                return [SimpleNamespace(id="gpt-5.4"), SimpleNamespace(id="claude-sonnet-4.5")]
+
+        with patch("actor_ai.providers.copilot.CopilotClient", FakeClient):
+            result = Copilot.available_models(use_sdk=True)
+        assert result == ["claude-sonnet-4.5", "gpt-5.4"]
+
+    def test_available_models_sdk_returns_sorted(self):
+        class FakeClient:
+            async def start(self):
+                pass
+
+            async def stop(self):
+                pass
+
+            async def list_models(self):
+                return [
+                    SimpleNamespace(id="gpt-5.5"),
+                    SimpleNamespace(id="auto"),
+                    SimpleNamespace(id="claude-haiku-4.5"),
+                ]
+
+        with patch("actor_ai.providers.copilot.CopilotClient", FakeClient):
+            result = Copilot.available_models(use_sdk=True)
+        assert result == sorted(["gpt-5.5", "auto", "claude-haiku-4.5"])
+
+    def test_available_models_sdk_stop_called_on_error(self):
+        """client.stop() must be called even when list_models() raises."""
+        stopped = []
+
+        class FakeClient:
+            async def start(self):
+                pass
+
+            async def stop(self):
+                stopped.append(True)
+
+            async def list_models(self):
+                raise RuntimeError("sdk error")
+
+        with patch("actor_ai.providers.copilot.CopilotClient", FakeClient):
+            with pytest.raises(RuntimeError, match="sdk error"):
+                Copilot.available_models(use_sdk=True)
+        assert stopped == [True]
+
+    def test_available_models_sdk_refresh_bypasses_cache(self):
+        calls = []
+
+        class FakeClient:
+            async def start(self):
+                pass
+
+            async def stop(self):
+                pass
+
+            async def list_models(self):
+                calls.append(1)
+                return [SimpleNamespace(id="auto")]
+
+        with patch("actor_ai.providers.copilot.CopilotClient", FakeClient):
+            Copilot.available_models(use_sdk=True)
+            Copilot.available_models(refresh=True, use_sdk=True)
+        assert len(calls) == 2
 
 
 # ---------------------------------------------------------------------------

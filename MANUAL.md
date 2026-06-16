@@ -639,17 +639,23 @@ print(Copilot.MODELS)   # frozenset of valid model strings
 
 #### Valid models
 
+The current model set is defined by the `CopilotModel` `Literal` type. Check `Copilot.MODELS` at runtime for the authoritative list (it is derived directly from the type). Representative models include:
+
 | Model | Notes |
 |---|---|
-| `gpt-4o` | Default |
-| `gpt-4o-mini` | |
-| `gpt-5` | |
-| `o1` | |
-| `o1-mini` | |
-| `o3-mini` | |
-| `claude-sonnet-4.5` | Anthropic Claude via Copilot (preferred form) |
-| `claude-sonnet-4-5` | Alias accepted |
-| `gemini-2.0-flash` | Google Gemini via Copilot |
+| `auto` | Default — Copilot selects the best model |
+| `gpt-5.4` | |
+| `gpt-5.4-mini` | |
+| `gpt-5.5` | |
+| `gpt-5-mini` | |
+| `gpt-5.3-codex` | |
+| `claude-sonnet-4.5` | Anthropic Claude via Copilot |
+| `claude-sonnet-4.6` | |
+| `claude-haiku-4.5` | |
+| `claude-opus-4.7` | |
+| `claude-opus-4.8` | |
+| `gemini-3.1-pro-preview` | Google Gemini via Copilot |
+| `gemini-3.5-flash` | |
 
 Passing any other model string raises `ValueError` at construction time. Use `Copilot.MODELS` (a `frozenset[str]`) for runtime validation, or the `CopilotModel` `Literal` for IDE autocompletion.
 
@@ -657,7 +663,7 @@ Passing any other model string raises `ValueError` at construction time. Use `Co
 
 | Parameter | Type | Description |
 |---|---|---|
-| `model` | `CopilotModel` | Default: `"gpt-4o"` |
+| `model` | `CopilotModel` | Default: `"auto"` |
 | `use_sdk` | `bool` | When `True`, call Copilot through the native async SDK session API |
 | `api_key` | `str \| None` | GitHub token; overrides env var and `gh` CLI |
 | `cli_url` | `str \| None` | Existing Copilot CLI server URL (SDK mode) |
@@ -680,6 +686,48 @@ agent = make_agent("Agent", "You assist.",
     LiteLLM("anthropic/claude-sonnet-4-6",
             temperature=0.2, max_retries=3,
             success_callbacks=["langfuse"]))
+```
+
+### Listing available models
+
+Every provider exposes a classmethod that queries its live API and returns a sorted list of model IDs:
+
+```python
+from actor_ai import Claude, GPT, Gemini, Mistral, DeepSeek, LiteLLM, Copilot
+
+Claude.available_models()       # queries Anthropic /v1/models
+GPT.available_models()          # queries OpenAI /v1/models
+Gemini.available_models()       # queries Google AI /v1/models
+Mistral.available_models()      # queries Mistral /v1/models
+DeepSeek.available_models()     # queries DeepSeek /v1/models
+LiteLLM.available_models()      # returns litellm.utils.get_valid_models()
+Copilot.available_models()      # queries Copilot /v1/models (REST endpoint)
+Copilot.available_models(use_sdk=True)  # queries via CopilotClient.list_models()
+```
+
+Results are cached for **6 hours** per provider class. Pass `refresh=True` to bypass the cache and force a new API call:
+
+```python
+models = Claude.available_models(refresh=True)
+```
+
+The `Copilot` provider also accepts `use_sdk=True` to query via the native SDK instead of the REST endpoint:
+
+```python
+Copilot.available_models()               # REST /v1/models endpoint (default)
+Copilot.available_models(use_sdk=True)   # CopilotClient.list_models() via Copilot CLI
+```
+
+**Signature** (all providers):
+
+```python
+ProviderClass.available_models(refresh: bool = False) -> list[str]
+```
+
+**Copilot only:**
+
+```python
+Copilot.available_models(refresh: bool = False, *, use_sdk: bool = False) -> list[str]
 ```
 
 ### Swapping providers at runtime
@@ -1344,6 +1392,21 @@ get_rate(model: str) -> ModelRate | None
 models() -> list[str]
 __contains__(model: str) -> bool
 ```
+
+### `LLMProvider.available_models()` — classmethod
+
+```python
+# All providers (6-hour TTL cache per class)
+ProviderClass.available_models(refresh: bool = False) -> list[str]
+
+# Copilot only (additional use_sdk keyword argument)
+Copilot.available_models(refresh: bool = False, *, use_sdk: bool = False) -> list[str]
+```
+
+| Argument | Default | Description |
+| --- | --- | --- |
+| `refresh` | `False` | Clear the cache entry and force a new API call |
+| `use_sdk` | `False` | Copilot only: use `CopilotClient.list_models()` instead of the REST endpoint |
 
 ### `@tool` decorator
 

@@ -13,6 +13,9 @@ import pytest
 
 # Local imports:
 from actor_ai.accounting import MonitoringContext, UsageSummary
+from actor_ai.providers import anthropic as _anthropic_mod
+from actor_ai.providers import litellm as _litellm_mod
+from actor_ai.providers import openai as _openai_mod
 from actor_ai.providers.base import LLMProvider
 
 
@@ -30,6 +33,10 @@ class FakeProvider(LLMProvider):
         self.calls: list[dict] = []
         # Usage to report via on_usage callback (simulates token counts)
         self._usage = usage or UsageSummary(input_tokens=10, output_tokens=5)
+
+    @classmethod
+    def available_models(cls, refresh: bool = False) -> list[str]:
+        return ["fake-model"]
 
     def run(
         self,
@@ -77,6 +84,10 @@ class ToolCallingFakeProvider(LLMProvider):
         self.tool_result: object = None
         self._usage = usage or UsageSummary(input_tokens=20, output_tokens=10)
 
+    @classmethod
+    def available_models(cls, refresh: bool = False) -> list[str]:
+        return ["fake-model"]
+
     def run(
         self,
         system: str,
@@ -118,3 +129,20 @@ def stop_all_actors():
     """Safety net: stop any actors that leaked from a test."""
     yield
     pykka.ActorRegistry.stop_all()
+
+
+@pytest.fixture(autouse=True)
+def clear_models_cache():
+    """Clear all provider model caches before each test."""
+    _anthropic_mod._MODELS_CACHE.clear()
+    _litellm_mod._MODELS_CACHE.clear()
+    _openai_mod._MODELS_CACHE.clear()
+    try:
+        # Local imports:
+        from actor_ai.providers import copilot as _copilot_mod
+
+        _copilot_mod._MODELS_CACHE.clear()
+        _copilot_mod._SDK_MODELS_CACHE.clear()
+    except ImportError:
+        pass
+    yield

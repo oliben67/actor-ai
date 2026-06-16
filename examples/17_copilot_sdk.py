@@ -21,7 +21,7 @@ from actor_ai import AIActor, Copilot, tool
 
 class MathAssistant(AIActor):
     system_prompt = "You are a concise assistant. Use tools when they help."
-    provider = Copilot("claude-sonnet-4.5", use_sdk=True, timeout=60.0)
+    provider = Copilot("claude-sonnet-4-6", use_sdk=True, timeout=60.0)
 
     @tool
     def add(self, a: int, b: int) -> int:
